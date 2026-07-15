@@ -1,19 +1,58 @@
 {
   "type": "object",
-  "title": "extractor configuration",
+  "title": "Medallia Connection",
   "required": [
-    "print_hello"
+    "instance_host",
+    "company_name",
+    "api_host",
+    "client_id",
+    "#client_secret"
   ],
   "properties": {
-    "print_hello": {
-      "type": "boolean",
-      "title": "Print Hello",
-      "propertyOrder": 1
+    "instance_host": {
+      "type": "string",
+      "title": "Instance Host",
+      "description": "Reporting instance host used for the OAuth token endpoint.",
+      "propertyOrder": 10,
+      "options": {
+        "tooltip": "The per-instance reporting host, e.g. `mycompany.medallia.com`. The token endpoint is `https://<instance host>/oauth/<company name>/token`. Ask your Medallia administrator if unsure."
+      }
     },
-    "debug": {
-      "type": "boolean",
-      "title": "Debug",
-      "propertyOrder": 2
+    "company_name": {
+      "type": "string",
+      "title": "Company Name",
+      "description": "The company/tenant segment of the OAuth token path.",
+      "propertyOrder": 20,
+      "options": {
+        "tooltip": "The `<companyName>` path segment in the token URL. Some instances double the company name in the API host, so it is supplied separately and never derived automatically."
+      }
+    },
+    "api_host": {
+      "type": "string",
+      "title": "API Host",
+      "description": "The Query API gateway host (the `.apis.medallia.com` host).",
+      "propertyOrder": 30,
+      "options": {
+        "tooltip": "The API gateway host, e.g. `mycompany.apis.medallia.com`. Query requests go to `https://<API host>/data/v0/query`. Sandbox hosts differ; supply the exact host issued for your instance."
+      }
+    },
+    "client_id": {
+      "type": "string",
+      "title": "Client ID",
+      "description": "OAuth 2.0 client ID issued by your Medallia administrator.",
+      "propertyOrder": 40
+    },
+    "#client_secret": {
+      "type": "string",
+      "title": "Client Secret",
+      "format": "password",
+      "description": "OAuth 2.0 client secret issued by your Medallia administrator.",
+      "propertyOrder": 50
+    },
+    "test_connection": {
+      "type": "button",
+      "format": "test-connection",
+      "propertyOrder": 60
     }
   }
 }

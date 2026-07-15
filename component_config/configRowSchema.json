@@ -1,1 +1,124 @@
-{}
+{
+  "type": "object",
+  "title": "Feedback Extraction",
+  "required": [
+    "fields",
+    "survey_id_field_id"
+  ],
+  "properties": {
+    "data_object": {
+      "type": "string",
+      "title": "Data Object",
+      "description": "Medallia data source to extract. v1 supports Feedback.",
+      "enum": [
+        "feedback"
+      ],
+      "options": {
+        "enum_titles": [
+          "Feedback"
+        ]
+      },
+      "default": "feedback",
+      "propertyOrder": 10
+    },
+    "fields": {
+      "type": "array",
+      "title": "Fields",
+      "description": "Field IDs to extract, one output column each.",
+      "format": "select",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [],
+        "format": "select",
+        "options": {
+          "async": {
+            "label": "Load Fields",
+            "action": "listFields",
+            "autoload": true,
+            "cache": true
+          }
+        }
+      },
+      "propertyOrder": 20,
+      "options": {
+        "tooltip": "Medallia field IDs (e.g. `e_nps`, `a_survey_channel`). Use Load Fields to pick from the instance metadata, or type IDs manually. Each field's values become one output column."
+      }
+    },
+    "survey_id_field_id": {
+      "type": "string",
+      "title": "Survey ID Field",
+      "description": "Field ID that identifies the survey; used as the table primary key.",
+      "format": "select",
+      "enum": [],
+      "options": {
+        "async": {
+          "label": "Load Fields",
+          "action": "listFields",
+          "autoload": true,
+          "cache": true
+        },
+        "tooltip": "The field ID holding the unique survey identifier. Written to the `surveyId` output column and set as the primary key for incremental upserts."
+      },
+      "propertyOrder": 30
+    },
+    "finish_date_field_id": {
+      "type": "string",
+      "title": "Finish Date Field",
+      "description": "Epoch-seconds field ID used as the incremental watermark.",
+      "default": "k_initialfinishdate_epoch_int",
+      "propertyOrder": 40,
+      "options": {
+        "tooltip": "The initial-finish-date field as Unix epoch seconds (default `k_initialfinishdate_epoch_int`). If your instance lacks this computed K-field, use its DATETIME equivalent. Drives both ordering and the incremental cursor."
+      }
+    },
+    "load_type": {
+      "type": "string",
+      "title": "Load Type",
+      "description": "Incremental keeps a watermark and fetches only new records.",
+      "enum": [
+        "incremental_load",
+        "full_load"
+      ],
+      "options": {
+        "enum_titles": [
+          "Incremental Load",
+          "Full Load"
+        ]
+      },
+      "default": "incremental_load",
+      "propertyOrder": 50
+    },
+    "initial_start_epoch": {
+      "type": "integer",
+      "title": "Initial Start (Epoch Seconds)",
+      "description": "First-run lower bound (finish-date epoch seconds) when no state exists.",
+      "propertyOrder": 60,
+      "options": {
+        "tooltip": "Unix epoch seconds. On the first run (empty state) only records with a finish date after this value are fetched. Leave empty to load full history."
+      }
+    },
+    "page_size": {
+      "type": "integer",
+      "title": "Page Size",
+      "description": "Records per request; capped at the Medallia maximum of 1000.",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 1000,
+      "propertyOrder": 70,
+      "options": {
+        "tooltip": "The `first` argument sent on every query. The component default is 1000 (the Medallia maximum) to minimise request count; note the Medallia API itself defaults to 30 only when `first` is omitted, which never happens here. Values above 1000 are clamped."
+      }
+    },
+    "filters": {
+      "type": "object",
+      "title": "Business Filters (Advanced)",
+      "description": "Optional Medallia filter tree merged into the query.",
+      "additionalProperties": true,
+      "propertyOrder": 80,
+      "options": {
+        "tooltip": "Advanced: a raw Medallia filter object (`and`/`or`/`not`, `in`, `gt`/`gte`/`lt`/`lte`, `isNull`) with `fieldIds`. Merged with the incremental watermark filter. Leave empty for no extra filtering."
+      }
+    }
+  }
+}
