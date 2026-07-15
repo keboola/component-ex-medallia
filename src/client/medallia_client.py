@@ -47,6 +47,12 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 # and skipped rather than raised (mirrors the reference extractor).
 INVALID_FIELD_ID_MARKER = "Invalid field id:"
 
+# When compute_cost_only is requested, Medallia returns the cost estimate THROUGH the
+# GraphQL ``errors[]`` channel (e.g. "Estimated query cost is: 1. To actually get results
+# please remove the 'compute cost only' parameter."). That is the expected success signal
+# of the free pre-flight, not a failure — it must not abort testConnection.
+COST_ONLY_MARKER = "Estimated query cost"
+
 
 class MedalliaClientError(Exception):
     """Unexpected/transport failure that is NOT user-actionable (maps to exit code 2)."""
@@ -319,7 +325,7 @@ class MedalliaClient:
     def _post_graphql(self, query: str, compute_cost_only: bool = False, unwrap_object: bool = True) -> dict:
         params = {"compute_cost_only": "true"} if compute_cost_only else None
         payload = self._request_with_retries(query, params)
-        self._raise_for_graphql_errors(payload)
+        self._raise_for_graphql_errors(payload, compute_cost_only=compute_cost_only)
 
         data = payload.get("data") or {}
         if not unwrap_object:
@@ -372,12 +378,15 @@ class MedalliaClient:
             return response.json()
 
     @staticmethod
-    def _raise_for_graphql_errors(payload: dict) -> None:
-        """Raise on real GraphQL errors; tolerate non-fatal ``Invalid field id:`` ones.
+    def _raise_for_graphql_errors(payload: dict, compute_cost_only: bool = False) -> None:
+        """Raise on real GraphQL errors; tolerate known non-fatal ones.
 
-        Medallia returns a per-field ``Invalid field id: <x>`` error when a selected or
-        auto-discovered field is not valid for the entity, yet still returns the valid
-        data. Such errors are logged as warnings; only OTHER errors abort the run.
+        Two Medallia messages arrive through ``errors[]`` but are not failures:
+        * ``Invalid field id: <x>`` — a selected/auto-discovered field is not valid for the
+          entity, yet the valid data is still returned. Logged as a warning.
+        * ``Estimated query cost is: <n>`` — the compute_cost_only pre-flight's success
+          signal (only tolerated when ``compute_cost_only`` was requested).
+        Only OTHER errors abort the run.
         """
         errors = payload.get("errors")
         if not errors:
@@ -387,6 +396,8 @@ class MedalliaClient:
             message = str(err.get("message", err) if isinstance(err, dict) else err)
             if INVALID_FIELD_ID_MARKER in message:
                 logging.warning("Medallia reported a non-fatal field error (data still returned): %s", message)
+            elif compute_cost_only and COST_ONLY_MARKER in message:
+                logging.info("compute_cost_only pre-flight succeeded: %s", message)
             else:
                 fatal.append(message)
         if fatal:

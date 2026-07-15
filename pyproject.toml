@@ -18,6 +18,11 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.2",
     "ty>=0.0.24",
+    # keboola.vcr 0.5.0's response-recording monkeypatch targets vcrpy's
+    # single-arg VCRHTTPResponse(recorded_response); vcrpy 8.2.0 added a positional
+    # request_url arg that breaks it ("takes 2 positional arguments but 3 given"),
+    # crashing every cassette recording. Pin to the last compatible vcrpy line.
+    "vcrpy>=8.1.1,<8.2",
 ]
 
 [tool.ruff]

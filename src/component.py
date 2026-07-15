@@ -31,7 +31,7 @@ from configuration import Configuration, FinishDateFieldType, RowConfiguration
 # client_secret/access_token/token/password; the extra fields cover this component's own
 # credential/tenant parameter names so no real value can leak into a recorded cassette.
 try:
-    from keboola.vcr import DefaultSanitizer
+    from keboola.vcr import DefaultSanitizer, UrlPatternSanitizer
 
     VCR_SANITIZERS = [
         DefaultSanitizer(
@@ -42,6 +42,20 @@ try:
                 "#password",
                 "#client_secret",
                 "client_secret",
+            ]
+        ),
+        # The tenant host and <companyName> path segment are not secrets, but they identify
+        # the customer instance and appear in request URIs (which DefaultSanitizer leaves
+        # intact). These GENERIC patterns rewrite any Medallia host / oauth company segment
+        # to fixed placeholders — no customer-specific value is hard-coded here. Applied on
+        # both record and replay (before_record_request), so a placeholder-host replay config
+        # still matches the recorded (rewritten) URIs. Order matters: the more specific
+        # ``apis.medallia.com`` gateway host is rewritten before the broader instance host.
+        UrlPatternSanitizer(
+            patterns=[
+                (r"https://[A-Za-z0-9._-]+\.apis\.medallia\.com", "https://api-host.redacted"),
+                (r"https://[A-Za-z0-9._-]+\.medallia\.com", "https://instance-host.redacted"),
+                (r"/oauth/[^/]+/token", "/oauth/company/token"),
             ]
         ),
     ]
@@ -82,10 +96,11 @@ class Component(ComponentBase):
         """Upper watermark bound (this run's ``now``) in the field's native format."""
         now = datetime.now(tz=UTC)
         if row.finish_date_field_type == FinishDateFieldType.datetime:
-            # ISO 8601 UTC datetime (e.g. 2026-07-15T00:00:00Z).
-            # TODO(verify-at-recording): confirm the exact datetime literal Medallia's
-            # filter accepts for the customer's datetime field (date-only vs full timestamp).
-            return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Verified at live recording: Medallia's date/datetime range filter rejects a
+            # full ISO-8601 timestamp with a 'Z' suffix ("Invalid date expression:
+            # 2026-07-15T17:03:01Z"). A date-only YYYY-MM-DD literal is accepted. Using the
+            # day boundary means today's records are picked up on the next run (bounded lag).
+            return now.strftime("%Y-%m-%d")
         return int(now.timestamp())
 
     # -- configuration -----------------------------------------------------------------
@@ -231,7 +246,9 @@ class Component(ComponentBase):
         """Query the ``fields`` metadata node to populate/validate field-ID selection."""
         config = self._get_config()
         client = self._build_metadata_client(config)
-        result = client.run_metadata_query("query { fields { nodes { id name dataType } } }")
+        # first: 1000 — the fields node otherwise defaults to Medallia's 30-record page,
+        # truncating the catalog offered for UI selection. 1000 matches MAX_PAGE_SIZE.
+        result = client.run_metadata_query("query { fields(first: 1000) { nodes { id name dataType } } }")
         nodes = ((result.get("fields") or {}).get("nodes")) or []
         return [SelectElement(value=node["id"], label=self._field_label(node)) for node in nodes if node.get("id")]
 
