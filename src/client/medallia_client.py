@@ -380,7 +380,7 @@ def watermark_from_node(node: dict, finish_date_field_id: str, fallback: Waterma
         return fallback
     try:
         return Watermark(finish_date_epoch=int(finish_values[0]), survey_id=str(survey_values[0]))
-    except TypeError, ValueError:
+    except (TypeError, ValueError):  # fmt: skip  # keep parens; ruff-fmt strips them on py3.14 (PEP 758)
         return fallback
 
 
