@@ -31,9 +31,6 @@ STATE_LAST_SURVEY_ID = "last_survey_id"
 # Sentinel survey id used for the first-run lower bound (reference repo convention).
 FIRST_RUN_SURVEY_ID = "-1"
 
-# Field IDs whose flattened values are the epoch watermark → INTEGER in the manifest.
-_INTEGER_COLUMNS = {"k_initialfinishdate_epoch_int"}
-
 
 class Component(ComponentBase):
     """Extractor for Medallia Query API feedback records."""
@@ -125,7 +122,7 @@ class Component(ComponentBase):
 
     def _build_table_definition(self, row: RowConfiguration) -> TableDefinition:
         columns = row.output_columns
-        schema = {name: self._column_definition(name) for name in columns}
+        schema = {name: self._column_definition(name, row.finish_date_field_id) for name in columns}
         return self.create_out_table_definition(
             f"{row.data_object.value}.csv",
             primary_key=["surveyId"],
@@ -135,8 +132,9 @@ class Component(ComponentBase):
         )
 
     @staticmethod
-    def _column_definition(name: str) -> ColumnDefinition:
-        if name in _INTEGER_COLUMNS:
+    def _column_definition(name: str, finish_date_field_id: str) -> ColumnDefinition:
+        # The configured finish-date watermark column carries epoch seconds → INTEGER.
+        if name == finish_date_field_id:
             data_type = BaseType.integer()
         else:
             data_type = BaseType.string()
@@ -175,7 +173,8 @@ class Component(ComponentBase):
         """Mint a token and run a cheap metadata query to validate connectivity."""
         config = self._get_config()
         client = self._build_metadata_client(config)
-        client.run_metadata_query("query { fields(first: 1) { totalCount } }")
+        # compute_cost_only validates auth + query at the gateway without consuming quota.
+        client.run_metadata_query("query { fields(first: 1) { totalCount } }", compute_cost_only=True)
         return ValidationResult("Connection to Medallia Query API succeeded.")
 
     @sync_action("listFields")

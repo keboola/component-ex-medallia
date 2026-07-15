@@ -267,14 +267,13 @@ class MedalliaClient:
             if total_count < page_size:
                 break
 
-    def estimate_cost(self, lower_bound: Watermark | None, end_epoch: int, page_size: int) -> dict:
-        """Run the feedback query in ``compute_cost_only`` mode (free, no quota consumed)."""
-        query = self._query_builder.build_query(lower_bound, end_epoch, page_size)
-        return self._post_graphql(query, compute_cost_only=True)
+    def run_metadata_query(self, query: str, compute_cost_only: bool = False) -> dict:
+        """Execute an arbitrary top-level GraphQL query (used by sync actions).
 
-    def run_metadata_query(self, query: str) -> dict:
-        """Execute an arbitrary top-level GraphQL query (used by sync actions)."""
-        return self._post_graphql(query, unwrap_object=False)
+        With ``compute_cost_only`` the query is validated and priced without executing or
+        consuming quota — used for a cheap connection pre-flight.
+        """
+        return self._post_graphql(query, compute_cost_only=compute_cost_only, unwrap_object=False)
 
     def _advance_watermark(self, node: dict, fallback: Watermark | None) -> Watermark | None:
         return watermark_from_node(node, self._query_builder.finish_date_field_id, fallback)
