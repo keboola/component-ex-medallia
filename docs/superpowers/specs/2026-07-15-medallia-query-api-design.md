@@ -103,7 +103,19 @@ fixtures.
   surveyId ASC]`, filter `(finishDate, surveyId) > last-seen`, loop by re-seeding the filter with the last
   processed record; decide "fetch another page" by `totalCount >= pageSize`. This unifies pagination with
   incremental state and survives Keboola's short-lived run boundaries (an in-run Relay `after` cursor is
-  useless across runs). **Page size default 30, max 1000** — clamp the configured value to 1000.
+  useless across runs). **Page size default 100, max 1000** — clamp the configured value to 1000 (default
+  matches the reference extractor; gentler on the live instance than the ceiling).
+- **Watermark value format — epoch OR ISO date/datetime.** The finish-date field is not required to be the
+  epoch-int K-field. It may be a DATETIME / ISO-date field (e.g. `e_creationdate`, `e_responsedate` with
+  values like `2026-05-01`). The watermark value is therefore stored and compared in its **native format**,
+  selected by a `finish_date_field_type` knob (`epoch` | `datetime`, default `epoch` for backward
+  compatibility): epoch values are parsed to `int` and compared numerically; ISO strings are kept verbatim
+  and compared lexicographically (ISO 8601 sorts correctly as strings). The keyset filter bounds and the
+  run's upper bound (`now`) are emitted in that same format — never hardcoded to epoch — so pointing the
+  watermark at a date field neither crashes (`int()` is not forced) nor stalls (the cursor still advances).
+- **Node identity.** Each node's direct scalar `id` is selected alongside the configured survey field (the
+  reference extractor selects a bare `id` on feedback/invitations nodes) and carried as an output column,
+  giving every record a stable, format-independent identity in addition to the `surveyId` primary key.
 - **Rate / cost limits — header-driven, not hardcoded.** Published Query-API limits: 70 req/s,
   975,000 req/24h, 3,000,000 cost units/query, 90s gateway timeout, configurable max query depth. The
   platform-wide baseline (~60k/24h) is a conservative floor. Real limits are per-contract and reported
@@ -132,13 +144,19 @@ Fields described here; the actual `configSchema.json` / `configRowSchema.json` a
 - `data_object` (enum, required) — `feedback` (v1); `invitations` / `customer` reserved for later rows.
 - `fields` (array of field-ID strings, required) — the `fieldData(fieldId)` selection; manual/advanced,
   optionally backed by the `listFields` sync-action dropdown.
-- `finish_date_field_id` (string, default `k_initialfinishdate_epoch_int`) — the epoch-seconds watermark
-  field; DATETIME fallback (`e_initialfinishdate`) if the instance lacks the K-field.
+- `finish_date_field_id` (string, default `k_initialfinishdate_epoch_int`) — the watermark field; may be an
+  epoch-seconds K-field or a DATETIME/ISO field (`e_creationdate`, `e_responsedate`, `e_initialfinishdate`).
+- `finish_date_field_type` (enum `epoch` | `datetime`, default `epoch`) — declares the watermark field's
+  value format so the value is stored/compared and the filter bounds are emitted in the right shape, and the
+  output column is typed correctly (epoch → INTEGER, datetime → STRING).
 - `survey_id_field_id` (string, default the instance's survey-id field) — second watermark component + PK.
 - `filters` (optional) — business filter tree passed into the GraphQL filter (`and`/`or`/`not`, `in`,
   `gt/gte/lt/lte`, `isNull`).
-- `page_size` (int, default 1000, clamped to 1000).
-- `initial_start_epoch` (int, optional) — first-run lower bound when state is empty.
+- `page_size` (int, default 100, clamped to 1000).
+- `initial_start_epoch` (int, optional) — first-run lower bound for an `epoch` watermark field when state is
+  empty.
+- `initial_start_value` (string, optional) — first-run lower bound (ISO date/datetime) for a `datetime`
+  watermark field when state is empty.
 - `load_type` (enum `incremental_load` | `full_load`, default `incremental_load`) — exposed as a dropdown,
   not a bare boolean.
 
@@ -166,12 +184,17 @@ Fields described here; the actual `configSchema.json` / `configRowSchema.json` a
 - **Error handling:** `UserException` (exit 1) for user-fixable problems — bad/missing config, auth failure
   after re-mint (401), query cost over the 3M ceiling, missing watermark field on the instance, GraphQL
   `errors[]` indicating a bad query/field. Unexpected failures bubble up as exit 2. Never `sys.exit(2)` for
-  a user-actionable error (exit 2 hides the message from the user).
+  a user-actionable error (exit 2 hides the message from the user). **Exception — non-fatal per-field
+  errors:** Medallia returns `Invalid field id: <x>` in `errors[]` when a selected/auto-discovered field is
+  not valid for the entity, yet still returns the valid data. Such errors are logged as a WARNING and the
+  response is processed; only OTHER (real) errors raise `UserException` (mirrors the reference extractor).
 - **Output manifest:** emit the **authoritative `schema` manifest** (`data_type.base.type`) — the CF
   default for a new component. Because `fieldData.values` is always strings, most columns are STRING;
-  `surveyId` is the PK; the epoch watermark field is INT. This requires the Dev Portal `dataTypeSupport`
-  property to be `authoritative` (set in Phase 6) — until flipped, the platform silently downgrades to
-  legacy hints. If the CSV is written **with** a header row, pass `has_header=True` so Storage skips it.
+  `surveyId` is the PK; the watermark field is INT **only when `finish_date_field_type=epoch`** — a
+  `datetime` watermark field stays STRING (forcing INTEGER would corrupt an ISO value). This requires the
+  Dev Portal `dataTypeSupport` property to be `authoritative` (set in Phase 6) — until flipped, the platform
+  silently downgrades to legacy hints. If the CSV is written **with** a header row, pass `has_header=True` so
+  Storage skips it.
 - **Scratch files go to `/tmp`**, never `data/out/tables/` (everything under `data/out/tables/` is uploaded
   to Storage as a table).
 - **Key dependencies:** `keboola.component` (common interface, state, manifests, `UserException`);
@@ -250,8 +273,13 @@ the sections above.
 - **incremental-state.md** → corrected/clarified: watermark captured before fetch, **persisted only after a
   successful write** (failed run retries from old watermark); `incremental=True` **with** `surveyId` PK =
   upsert; `load_type` is a row-level `full_load`/`incremental_load` **dropdown** (default incremental), not
-  a bare boolean (§2, §5, §6). Our cursor is a composite `(finishDate epoch, surveyId)` rather than a single
-  `last_run` timestamp — the same pattern, adapted to the source's keyset order.
+  a bare boolean (§2, §5, §6). Our cursor is a composite `(finishDate, surveyId)` rather than a single
+  `last_run` timestamp — the same pattern, adapted to the source's keyset order. **Refined for real customer
+  usage:** the finish-date component is format-aware — an epoch-int field stores/compares as an `int`
+  (numeric, output INTEGER), a DATETIME/ISO field stores/compares as a `str` (lexicographic, output STRING),
+  selected by `finish_date_field_type`; the filter bounds are emitted in that same native format so the
+  cursor advances for both. Separately, Medallia's non-fatal `Invalid field id:` `errors[]` entries are
+  tolerated (logged, data still processed) so a single bad/auto-discovered field ID does not abort the load.
 - **native-data-types.md** → corrected: v1 emits the **authoritative `schema`** manifest (not legacy
   `column_metadata`); this needs the Dev Portal `dataTypeSupport=authoritative` flip (Phase 6) or output is
   silently downgraded; if a header row is written, pass `has_header=True` (§6, §9).

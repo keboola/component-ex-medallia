@@ -19,7 +19,7 @@ from client.medallia_client import (
     flatten_node,
     watermark_from_node,
 )
-from configuration import MAX_PAGE_SIZE, Configuration, LoadType, RowConfiguration
+from configuration import MAX_PAGE_SIZE, Configuration, FinishDateFieldType, LoadType, RowConfiguration
 
 INSTANCE_HOST = "instance.example.test"
 API_HOST = "acme.apis.example.test"
@@ -155,7 +155,7 @@ class TestQueryBuilder(unittest.TestCase):
         )
 
     def test_first_run_filter_has_no_keyset_lower_bound(self):
-        query = self._builder().build_query(None, end_epoch=2000, page_size=50)
+        query = self._builder().build_query(None, end_bound=2000, page_size=50)
         self.assertIn("first: 50", query)
         # Upper bound present; no keyset OR / gt lower-bound branch on first run.
         self.assertIn('lt: "2000"', query)
@@ -163,8 +163,8 @@ class TestQueryBuilder(unittest.TestCase):
         self.assertNotIn("gt:", query)
 
     def test_seeded_watermark_builds_keyset_lower_bound(self):
-        wm = Watermark(finish_date_epoch=1500, survey_id="S9")
-        query = self._builder().build_query(wm, end_epoch=2000, page_size=50)
+        wm = Watermark(finish_date_value=1500, survey_id="S9")
+        query = self._builder().build_query(wm, end_bound=2000, page_size=50)
         self.assertIn("or:", query)
         self.assertIn('gt: "1500"', query)
         self.assertIn('gte: "1500"', query)
@@ -191,6 +191,26 @@ class TestQueryBuilder(unittest.TestCase):
         self.assertIn('fieldIds: ["a_channel"]', query)
         self.assertIn('eq: "web"', query)
 
+    def test_node_id_selected_directly(self):
+        # The bare ``id`` scalar is selected (not wrapped in fieldData) on every node.
+        query = self._builder().build_query(None, 2000, 10)
+        self.assertIn("nodes { id ", query)
+
+    def test_datetime_bounds_emitted_as_iso_strings(self):
+        builder = MedalliaQueryBuilder(
+            data_object="feedback",
+            survey_id_field_id="a_sid",
+            finish_date_field_id="e_creationdate",
+            fields=["c1"],
+            finish_date_field_type="datetime",
+        )
+        wm = Watermark(finish_date_value="2026-05-01", survey_id="S9")
+        query = builder.build_query(wm, end_bound="2026-07-15T00:00:00Z", page_size=50)
+        # Upper and lower bounds are the ISO strings verbatim — never coerced to epoch.
+        self.assertIn('lt: "2026-07-15T00:00:00Z"', query)
+        self.assertIn('gt: "2026-05-01"', query)
+        self.assertIn('gte: "2026-05-01"', query)
+
 
 # --------------------------------------------------------------------------------------
 # Client (paginator, auth retry, backoff, rate-limit, errors)
@@ -211,7 +231,7 @@ class TestClient(unittest.TestCase):
             _feedback_page([_node("3", "300")], total_count=1),
         ]
         client = _make_client(session)
-        nodes = list(client.fetch_feedback(None, end_epoch=9999, page_size=2))
+        nodes = list(client.fetch_feedback(None, end_bound=9999, page_size=2))
         self.assertEqual(len(nodes), 3)
         self.assertEqual(len(session.query_calls), 2)
         # Second page's query advanced past the last node of page one (finish=200).
@@ -285,6 +305,36 @@ class TestClient(unittest.TestCase):
         with self.assertRaises(UserException):
             list(client.fetch_feedback(None, 9999, page_size=5))
 
+    def test_invalid_field_id_error_is_tolerated(self):
+        # Medallia returns a non-fatal "Invalid field id:" error but still returns data —
+        # the run must continue and yield the valid nodes rather than aborting.
+        session = FakeHTTPSession()
+        session.query_responses = [
+            FakeResponse(
+                200,
+                {
+                    "data": {"feedback": {"totalCount": 1, "nodes": [_node("1", "100")]}},
+                    "errors": [{"message": "Invalid field id: e_bogus"}],
+                },
+            )
+        ]
+        client = _make_client(session)
+        nodes = list(client.fetch_feedback(None, 9999, page_size=5))
+        self.assertEqual(len(nodes), 1)
+
+    def test_invalid_field_id_mixed_with_real_error_still_raises(self):
+        # If a real error accompanies the tolerated one, the run must still fail.
+        session = FakeHTTPSession()
+        session.query_responses = [
+            FakeResponse(
+                200,
+                {"errors": [{"message": "Invalid field id: e_bogus"}, {"message": "cost limit exceeded"}]},
+            )
+        ]
+        client = _make_client(session)
+        with self.assertRaises(UserException):
+            list(client.fetch_feedback(None, 9999, page_size=5))
+
     def test_low_rate_limit_triggers_pause(self):
         session = FakeHTTPSession()
         session.query_responses = [
@@ -324,17 +374,52 @@ class TestHelpers(unittest.TestCase):
     def test_watermark_from_node_good(self):
         node = {"surveyId": {"values": ["S1"]}, "k_fin": {"values": ["1700"]}}
         wm = watermark_from_node(node, "k_fin")
-        self.assertEqual(wm, Watermark(finish_date_epoch=1700, survey_id="S1"))
+        self.assertEqual(wm, Watermark(finish_date_value=1700, survey_id="S1"))
 
     def test_watermark_from_node_bad_value_falls_back(self):
-        fallback = Watermark(finish_date_epoch=1, survey_id="prev")
+        fallback = Watermark(finish_date_value=1, survey_id="prev")
         node = {"surveyId": {"values": ["S1"]}, "k_fin": {"values": ["not-an-int"]}}
         self.assertEqual(watermark_from_node(node, "k_fin", fallback), fallback)
 
     def test_watermark_from_node_missing_values_falls_back(self):
-        fallback = Watermark(finish_date_epoch=1, survey_id="prev")
+        fallback = Watermark(finish_date_value=1, survey_id="prev")
         node = {"surveyId": {"values": []}, "k_fin": {"values": []}}
         self.assertEqual(watermark_from_node(node, "k_fin", fallback), fallback)
+
+    def test_watermark_from_node_datetime_kept_as_string(self):
+        # A DATETIME/ISO watermark field must NOT be forced through int() — the value is
+        # stored verbatim as a string so the watermark can advance.
+        node = {"surveyId": {"values": ["S1"]}, "e_creationdate": {"values": ["2026-05-01"]}}
+        wm = watermark_from_node(node, "e_creationdate", field_type="datetime")
+        self.assertEqual(wm, Watermark(finish_date_value="2026-05-01", survey_id="S1"))
+
+    def test_watermark_advances_monotonically(self):
+        # ISO strings compare lexicographically; a newer record advances, an older one does not.
+        current = Watermark(finish_date_value="2026-05-01", survey_id="S5")
+        newer = {"surveyId": {"values": ["S6"]}, "d": {"values": ["2026-05-02"]}}
+        older = {"surveyId": {"values": ["S1"]}, "d": {"values": ["2026-04-01"]}}
+        self.assertEqual(
+            watermark_from_node(newer, "d", current, field_type="datetime"),
+            Watermark(finish_date_value="2026-05-02", survey_id="S6"),
+        )
+        self.assertEqual(watermark_from_node(older, "d", current, field_type="datetime"), current)
+
+    def test_watermark_epoch_advances_numerically(self):
+        # Epoch values must compare numerically, not lexicographically ("9" < "1000" as ints).
+        current = Watermark(finish_date_value=9, survey_id="S1")
+        node = {"surveyId": {"values": ["S2"]}, "k_fin": {"values": ["1000"]}}
+        self.assertEqual(
+            watermark_from_node(node, "k_fin", current),
+            Watermark(finish_date_value=1000, survey_id="S2"),
+        )
+
+    def test_flatten_node_direct_scalar_id(self):
+        # The node ``id`` is a bare scalar (not a fieldData ``{values}`` wrapper).
+        node = {"id": "F1", "surveyId": {"values": ["S1"]}, "missing_id": None}
+        row = flatten_node(node, ["id", "surveyId", "missing_id"])
+        self.assertEqual(row["id"], "F1")
+        self.assertEqual(row["surveyId"], "S1")
+        self.assertIsNone(row["missing_id"])
 
 
 # --------------------------------------------------------------------------------------
@@ -392,11 +477,30 @@ class TestConfiguration(unittest.TestCase):
 
     def test_output_columns_dedupe(self):
         row = RowConfiguration(**_valid_params(fields=["a_sid", "k_fin", "e_nps"]))
-        self.assertEqual(row.output_columns, ["surveyId", "k_fin", "e_nps"])
+        # Node ``id`` leads, then surveyId, watermark field, and the non-reserved user fields.
+        self.assertEqual(row.output_columns, ["id", "surveyId", "k_fin", "e_nps"])
 
     def test_full_load_not_incremental(self):
         row = RowConfiguration(**_valid_params(load_type="full_load"))
         self.assertFalse(row.incremental)
+
+    def test_finish_date_field_type_defaults_to_epoch(self):
+        row = RowConfiguration(**_valid_params())
+        self.assertEqual(row.finish_date_field_type, FinishDateFieldType.epoch)
+        # Epoch first-run seed comes from initial_start_epoch.
+        row = RowConfiguration(**_valid_params(initial_start_epoch=1700))
+        self.assertEqual(row.initial_start, 1700)
+
+    def test_datetime_field_type_uses_iso_seed(self):
+        row = RowConfiguration(
+            **_valid_params(
+                finish_date_field_id="e_creationdate",
+                finish_date_field_type="datetime",
+                initial_start_value="2026-05-01",
+            )
+        )
+        self.assertEqual(row.finish_date_field_type, FinishDateFieldType.datetime)
+        self.assertEqual(row.initial_start, "2026-05-01")
 
 
 if __name__ == "__main__":

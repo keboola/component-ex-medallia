@@ -42,16 +42,32 @@ RATE_LIMIT_PAUSE_SECONDS = 1.0
 _HTTP_UNAUTHORIZED = 401
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
+# Substring of the non-fatal per-field GraphQL error Medallia returns when a selected field
+# is not valid for the queried entity. The valid data still comes back, so these are logged
+# and skipped rather than raised (mirrors the reference extractor).
+INVALID_FIELD_ID_MARKER = "Invalid field id:"
+
 
 class MedalliaClientError(Exception):
     """Unexpected/transport failure that is NOT user-actionable (maps to exit code 2)."""
 
 
+# Finish-date watermark field value formats (mirror ``configuration.FinishDateFieldType``;
+# kept as bare strings here so the client stays free of a config-module import).
+FINISH_FIELD_TYPE_EPOCH = "epoch"
+FINISH_FIELD_TYPE_DATETIME = "datetime"
+
+
 @dataclass(frozen=True)
 class Watermark:
-    """Composite keyset cursor: (finish-date epoch seconds, survey id)."""
+    """Composite keyset cursor: (finish-date value, survey id).
 
-    finish_date_epoch: int
+    ``finish_date_value`` is stored in the watermark field's native format — an ``int``
+    for epoch-seconds fields, a ``str`` for ISO date/datetime fields. It is never coerced
+    to ``int``, so pointing the watermark at a DATETIME field does not crash or stall.
+    """
+
+    finish_date_value: int | str
     survey_id: str
 
 
@@ -155,12 +171,14 @@ class MedalliaQueryBuilder:
         finish_date_field_id: str,
         fields: list[str],
         business_filters: dict | None = None,
+        finish_date_field_type: str = FINISH_FIELD_TYPE_EPOCH,
     ):
         self._data_object = data_object
         self._survey_field = survey_id_field_id
         self._finish_field = finish_date_field_id
         self._fields = fields
         self._business_filters = business_filters
+        self._finish_field_type = finish_date_field_type
 
     @property
     def data_object(self) -> str:
@@ -170,10 +188,18 @@ class MedalliaQueryBuilder:
     def finish_date_field_id(self) -> str:
         return self._finish_field
 
-    def build_query(self, lower_bound: Watermark | None, end_epoch: int, page_size: int) -> str:
-        """Return the GraphQL query string for one keyset page."""
+    @property
+    def finish_date_field_type(self) -> str:
+        return self._finish_field_type
+
+    def build_query(self, lower_bound: Watermark | None, end_bound: int | str, page_size: int) -> str:
+        """Return the GraphQL query string for one keyset page.
+
+        ``end_bound`` is the run's upper watermark bound in the field's native format
+        (epoch seconds for epoch fields, an ISO date/datetime string for datetime fields).
+        """
         selection = self._build_selection()
-        filter_arg = _to_graphql(self._build_filter(lower_bound, end_epoch))
+        filter_arg = _to_graphql(self._build_filter(lower_bound, end_bound))
         order_by = (
             f"[{{fieldId: {json.dumps(self._finish_field)}, direction: ASC}}, "
             f"{{fieldId: {json.dumps(self._survey_field)}, direction: ASC}}]"
@@ -187,7 +213,10 @@ class MedalliaQueryBuilder:
         )
 
     def _build_selection(self) -> str:
+        # ``id`` is the node's direct scalar identifier (a bare field, NOT fieldData) — the
+        # reference extractor selects it on feedback/invitations nodes for a stable record id.
         parts = [
+            "id",
             f"surveyId: fieldData(fieldId: {json.dumps(self._survey_field)}) {{ values }}",
             f"{self._finish_field}: fieldData(fieldId: {json.dumps(self._finish_field)}) {{ values }}",
         ]
@@ -198,21 +227,23 @@ class MedalliaQueryBuilder:
             parts.append(f"{field_id}: fieldData(fieldId: {json.dumps(field_id)}) {{ values }}")
         return " ".join(parts)
 
-    def _build_filter(self, lower_bound: Watermark | None, end_epoch: int) -> dict:
+    def _build_filter(self, lower_bound: Watermark | None, end_bound: int | str) -> dict:
         clauses: list[dict] = []
         if self._business_filters:
             clauses.append(self._business_filters)
-        # Upper bound: this run's "now".
-        clauses.append({"fieldIds": [self._finish_field], "lt": str(end_epoch)})
-        # Composite exclusive lower bound: (finishDate, surveyId) > watermark.
+        # Upper bound: this run's "now", emitted in the field's own format (str() covers
+        # both an int epoch and an ISO date/datetime string).
+        clauses.append({"fieldIds": [self._finish_field], "lt": str(end_bound)})
+        # Composite exclusive lower bound: (finishDate, surveyId) > watermark. Bound values
+        # are emitted in the same native format the field expects (epoch string or ISO string).
         if lower_bound is not None:
             clauses.append(
                 {
                     "or": [
-                        {"fieldIds": [self._finish_field], "gt": str(lower_bound.finish_date_epoch)},
+                        {"fieldIds": [self._finish_field], "gt": str(lower_bound.finish_date_value)},
                         {
                             "and": [
-                                {"fieldIds": [self._finish_field], "gte": str(lower_bound.finish_date_epoch)},
+                                {"fieldIds": [self._finish_field], "gte": str(lower_bound.finish_date_value)},
                                 {"fieldIds": [self._survey_field], "gt": str(lower_bound.survey_id)},
                             ]
                         },
@@ -249,12 +280,12 @@ class MedalliaClient:
     def query_url(self) -> str:
         return self._query_url
 
-    def fetch_feedback(self, lower_bound: Watermark | None, end_epoch: int, page_size: int) -> Iterator[dict]:
+    def fetch_feedback(self, lower_bound: Watermark | None, end_bound: int | str, page_size: int) -> Iterator[dict]:
         """Yield feedback nodes across keyset pages, advancing the in-memory watermark."""
         current = lower_bound
         page_index = 0
         while True:
-            query = self._query_builder.build_query(current, end_epoch, page_size)
+            query = self._query_builder.build_query(current, end_bound, page_size)
             data_object = self._post_graphql(query)
             page_index += 1
             nodes = data_object.get("nodes") or []
@@ -278,7 +309,12 @@ class MedalliaClient:
         return self._post_graphql(query, compute_cost_only=compute_cost_only, unwrap_object=False)
 
     def _advance_watermark(self, node: dict, fallback: Watermark | None) -> Watermark | None:
-        return watermark_from_node(node, self._query_builder.finish_date_field_id, fallback)
+        return watermark_from_node(
+            node,
+            self._query_builder.finish_date_field_id,
+            fallback,
+            field_type=self._query_builder.finish_date_field_type,
+        )
 
     def _post_graphql(self, query: str, compute_cost_only: bool = False, unwrap_object: bool = True) -> dict:
         params = {"compute_cost_only": "true"} if compute_cost_only else None
@@ -337,10 +373,24 @@ class MedalliaClient:
 
     @staticmethod
     def _raise_for_graphql_errors(payload: dict) -> None:
+        """Raise on real GraphQL errors; tolerate non-fatal ``Invalid field id:`` ones.
+
+        Medallia returns a per-field ``Invalid field id: <x>`` error when a selected or
+        auto-discovered field is not valid for the entity, yet still returns the valid
+        data. Such errors are logged as warnings; only OTHER errors abort the run.
+        """
         errors = payload.get("errors")
-        if errors:
-            messages = "; ".join(str(err.get("message", err)) for err in errors)
-            raise UserException(f"Medallia GraphQL query returned errors: {messages}")
+        if not errors:
+            return
+        fatal: list[str] = []
+        for err in errors:
+            message = str(err.get("message", err) if isinstance(err, dict) else err)
+            if INVALID_FIELD_ID_MARKER in message:
+                logging.warning("Medallia reported a non-fatal field error (data still returned): %s", message)
+            else:
+                fatal.append(message)
+        if fatal:
+            raise UserException(f"Medallia GraphQL query returned errors: {'; '.join(fatal)}")
 
     def _retry_delay(self, response: requests.Response, attempt: int) -> float:
         retry_after = response.headers.get("Retry-After")
@@ -374,30 +424,84 @@ class MedalliaClient:
         time.sleep(seconds)
 
 
-def watermark_from_node(node: dict, finish_date_field_id: str, fallback: Watermark | None = None) -> Watermark | None:
-    """Extract the composite ``(finishDate epoch, surveyId)`` watermark from a node."""
+def _coerce_finish_value(raw: object, field_type: str) -> int | str | None:
+    """Coerce a raw finish-date value into the field's native watermark type.
+
+    ``datetime`` fields keep the string as-is (ISO 8601 sorts correctly). ``epoch`` fields
+    parse to ``int``; a non-numeric epoch value is treated as unusable (``None``) so the
+    caller keeps the previous watermark rather than crashing.
+    """
+    if field_type == FINISH_FIELD_TYPE_DATETIME:
+        return str(raw)
+    try:
+        return int(str(raw))
+    except TypeError, ValueError:
+        return None
+
+
+def _is_after(candidate: Watermark, current: Watermark) -> bool:
+    """True if ``candidate`` sorts strictly after ``current`` on ``(finish, surveyId)``.
+
+    Epoch values compare numerically, ISO date/datetime strings lexicographically. Mismatched
+    value types (e.g. the field type changed between runs) fall back to a string comparison so
+    the guard never raises.
+    """
+    cand_finish = candidate.finish_date_value
+    curr_finish = current.finish_date_value
+    if isinstance(cand_finish, int) and isinstance(curr_finish, int):
+        if cand_finish != curr_finish:
+            return cand_finish > curr_finish
+    else:
+        cand_str, curr_str = str(cand_finish), str(curr_finish)
+        if cand_str != curr_str:
+            return cand_str > curr_str
+    # Finish values tie → break on surveyId.
+    return candidate.survey_id > current.survey_id
+
+
+def watermark_from_node(
+    node: dict,
+    finish_date_field_id: str,
+    fallback: Watermark | None = None,
+    field_type: str = FINISH_FIELD_TYPE_EPOCH,
+) -> Watermark | None:
+    """Extract the composite ``(finishDate, surveyId)`` watermark from a node.
+
+    The finish-date value is stored in its native format (int epoch or ISO string) and the
+    watermark advances monotonically: the candidate replaces the fallback only when it sorts
+    strictly after it, so out-of-order or duplicate boundary records never regress the cursor.
+    """
     survey_values = (node.get("surveyId") or {}).get("values") or []
     finish_values = (node.get(finish_date_field_id) or {}).get("values") or []
     if not survey_values or not finish_values:
         return fallback
-    try:
-        return Watermark(finish_date_epoch=int(finish_values[0]), survey_id=str(survey_values[0]))
-    except (TypeError, ValueError):  # fmt: skip  # keep parens; ruff-fmt strips them on py3.14 (PEP 758)
+    value = _coerce_finish_value(finish_values[0], field_type)
+    if value is None:
         return fallback
+    candidate = Watermark(finish_date_value=value, survey_id=str(survey_values[0]))
+    if fallback is None:
+        return candidate
+    return candidate if _is_after(candidate, fallback) else fallback
 
 
 def flatten_node(node: dict, columns: list[str]) -> dict:
     """Map one GraphQL node to one output row.
 
-    Single-element ``values`` → scalar; empty → None; multi-element → JSON-encoded string.
+    ``fieldData`` columns arrive as ``{"values": [...]}`` — single-element → scalar, empty →
+    None, multi-element → JSON-encoded string. A direct scalar column (e.g. the node ``id``)
+    arrives as a bare value and is copied through as-is (missing → None).
     """
     row: dict[str, object] = {}
     for column in columns:
-        values = (node.get(column) or {}).get("values")
-        if not values:
-            row[column] = None
-        elif len(values) == 1:
-            row[column] = values[0]
+        raw = node.get(column)
+        if isinstance(raw, dict):
+            values = raw.get("values")
+            if not values:
+                row[column] = None
+            elif len(values) == 1:
+                row[column] = values[0]
+            else:
+                row[column] = json.dumps(values)
         else:
-            row[column] = json.dumps(values)
+            row[column] = raw
     return row

@@ -17,16 +17,20 @@ Run everything with `uv run pytest`. No credentials are needed for the committed
 VCR recording exercises a **customer's live production Medallia instance**. It has NOT been
 performed and the recorded cassettes are **not committed**.
 
-Recording is blocked on two non-secret Medallia hostnames that were **not** present in
-`secrets.json`: `instance_host` (OAuth token endpoint) and `api_host` (Query API gateway).
-`secrets.json` currently provides only `parameters.username`, `parameters.#password`, and
-`parameters.company` (→ `client_id`, `#client_secret`, `company_name`). Do not guess the
-hosts — obtain them before recording.
+Recording is blocked on the **OAuth client secret** (`#client_secret`). A usable plaintext
+secret is not available — the customer's stored value is a `KBC::ProjectSecure` blob that
+only decrypts inside their project. Recording cannot run until a usable secret is provided.
 
-When the hosts are available, record gently against the live instance:
+The gitignored, local-only `secrets.json` now provides the non-secret connection values
+under the component's own parameter keys — `instance_host`, `api_host`, `company_name`,
+`client_id` — so only `#client_secret` needs to be added before recording. `secrets.json`
+is never committed and contains no client secret.
 
-1. Fill the real hosts into the `PLACEHOLDER_*` values in `tests/setup/configs.json`
-   (hosts are non-secret and are recorded as-is). Real credentials stay in `secrets.json`.
+When a usable client secret is available, record gently against the live instance:
+
+1. Add `#client_secret` to `secrets.json`. The connection hosts/company/client_id are
+   already there; keep the `PLACEHOLDER_*`/`DUMMY_*` values in `tests/setup/configs.json`
+   as-is (secrets.json overlays the real values at record time). Never commit real values.
 2. Keep the blast radius tiny: `page_size = 5`, a recent `initial_start_epoch`
    (~7 days ago) so few records match, and cap recording at **≤ 2 feedback pages**.
    `testConnection` uses `compute_cost_only` (free); `listFields` is a single metadata call.

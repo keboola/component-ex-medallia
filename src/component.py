@@ -22,7 +22,7 @@ from client import (
     flatten_node,
     watermark_from_node,
 )
-from configuration import Configuration, RowConfiguration
+from configuration import Configuration, FinishDateFieldType, RowConfiguration
 
 # VCR sanitizers — picked up automatically by the keboola.datadirtest scaffolder while
 # RECORDING cassettes. keboola.vcr ships only inside keboola.datadirtest (a dev-only
@@ -68,14 +68,25 @@ class Component(ComponentBase):
         row = self._get_row_config()
         client = self._build_client(config, row)
 
-        end_epoch = int(datetime.now(tz=UTC).timestamp())
+        end_bound = self._end_bound(row)
         lower_bound = self._seed_lower_bound(row)
 
         table = self._build_table_definition(row)
-        final_watermark = self._write_table(table, client, row, lower_bound, end_epoch)
+        final_watermark = self._write_table(table, client, row, lower_bound, end_bound)
         self.write_manifest(table)
 
         self._save_state(final_watermark)
+
+    @staticmethod
+    def _end_bound(row: RowConfiguration) -> int | str:
+        """Upper watermark bound (this run's ``now``) in the field's native format."""
+        now = datetime.now(tz=UTC)
+        if row.finish_date_field_type == FinishDateFieldType.datetime:
+            # ISO 8601 UTC datetime (e.g. 2026-07-15T00:00:00Z).
+            # TODO(verify-at-recording): confirm the exact datetime literal Medallia's
+            # filter accepts for the customer's datetime field (date-only vs full timestamp).
+            return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return int(now.timestamp())
 
     # -- configuration -----------------------------------------------------------------
 
@@ -101,6 +112,7 @@ class Component(ComponentBase):
             finish_date_field_id=row.finish_date_field_id,
             fields=row.fields,
             business_filters=row.filters,
+            finish_date_field_type=row.finish_date_field_type.value,
         )
         return MedalliaClient(
             api_host=config.api_host,
@@ -111,24 +123,30 @@ class Component(ComponentBase):
     # -- incremental state -------------------------------------------------------------
 
     def _seed_lower_bound(self, row: RowConfiguration) -> Watermark | None:
-        """Lower bound = stored watermark (incremental) or ``initial_start_epoch`` on first run."""
+        """Lower bound = stored watermark (incremental) or the first-run seed value."""
         if row.incremental:
-            state = self._load_state()
+            state = self._load_state(row)
             if state is not None:
                 return state
-        if row.initial_start_epoch is not None:
-            return Watermark(finish_date_epoch=row.initial_start_epoch, survey_id=FIRST_RUN_SURVEY_ID)
-        logging.info("No stored watermark and no initial_start_epoch; loading full history.")
+        if row.initial_start is not None:
+            return Watermark(finish_date_value=row.initial_start, survey_id=FIRST_RUN_SURVEY_ID)
+        logging.info("No stored watermark and no first-run start value; loading full history.")
         return None
 
-    def _load_state(self) -> Watermark | None:
+    def _load_state(self, row: RowConfiguration) -> Watermark | None:
         state = self.get_state_file() or {}
-        epoch = state.get(STATE_LAST_FINISH_DATE_EPOCH)
+        raw_finish = state.get(STATE_LAST_FINISH_DATE_EPOCH)
         survey_id = state.get(STATE_LAST_SURVEY_ID)
-        if epoch is None or survey_id is None:
+        if raw_finish is None or survey_id is None:
             return None
-        logging.info("Resuming from stored watermark (finish_date_epoch=%s).", epoch)
-        return Watermark(finish_date_epoch=int(epoch), survey_id=str(survey_id))
+        # Keep the value in the watermark field's native format (int epoch / ISO string);
+        # an epoch field stored as a numeric string is normalised back to int.
+        if row.finish_date_field_type == FinishDateFieldType.datetime:
+            finish_value: int | str = str(raw_finish)
+        else:
+            finish_value = int(raw_finish)
+        logging.info("Resuming from stored watermark (finish=%s).", finish_value)
+        return Watermark(finish_date_value=finish_value, survey_id=str(survey_id))
 
     def _save_state(self, watermark: Watermark | None) -> None:
         if watermark is None:
@@ -136,17 +154,22 @@ class Component(ComponentBase):
             return
         self.write_state_file(
             {
-                STATE_LAST_FINISH_DATE_EPOCH: watermark.finish_date_epoch,
+                STATE_LAST_FINISH_DATE_EPOCH: watermark.finish_date_value,
                 STATE_LAST_SURVEY_ID: watermark.survey_id,
             }
         )
-        logging.info("Persisted watermark (finish_date_epoch=%s).", watermark.finish_date_epoch)
+        logging.info("Persisted watermark (finish=%s).", watermark.finish_date_value)
 
     # -- output ------------------------------------------------------------------------
 
     def _build_table_definition(self, row: RowConfiguration) -> TableDefinition:
         columns = row.output_columns
-        schema = {name: self._column_definition(name, row.finish_date_field_id) for name in columns}
+        schema = {name: self._column_definition(name, row) for name in columns}
+        # PK is the configured survey field alias (surveyId). The node ``id`` is also
+        # captured as a column for a format-independent record identity.
+        # TODO(verify-at-recording): confirm against a live feedback response whether the
+        # node ``id`` (or surveyId) is the truly-unique record key, and promote it to the
+        # primary key if surveyId is not unique for this instance's schema.
         return self.create_out_table_definition(
             f"{row.data_object.value}.csv",
             primary_key=["surveyId"],
@@ -156,9 +179,10 @@ class Component(ComponentBase):
         )
 
     @staticmethod
-    def _column_definition(name: str, finish_date_field_id: str) -> ColumnDefinition:
-        # The configured finish-date watermark column carries epoch seconds → INTEGER.
-        if name == finish_date_field_id:
+    def _column_definition(name: str, row: RowConfiguration) -> ColumnDefinition:
+        # Type the finish-date watermark column by its declared format: epoch → INTEGER,
+        # datetime/ISO → STRING (forcing INTEGER on a date field would corrupt the value).
+        if name == row.finish_date_field_id and row.finish_date_field_type == FinishDateFieldType.epoch:
             data_type = BaseType.integer()
         else:
             data_type = BaseType.string()
@@ -174,18 +198,19 @@ class Component(ComponentBase):
         client: MedalliaClient,
         row: RowConfiguration,
         lower_bound: Watermark | None,
-        end_epoch: int,
+        end_bound: int | str,
     ) -> Watermark | None:
         """Stream feedback nodes into the output CSV, returning the advanced watermark."""
         columns = row.output_columns
         watermark = lower_bound
         record_count = 0
+        field_type = row.finish_date_field_type.value
         with open(table.full_path, "w", encoding="utf-8", newline="") as out_file:
             writer = csv.DictWriter(out_file, fieldnames=columns)
             writer.writeheader()
-            for node in client.fetch_feedback(lower_bound, end_epoch, row.page_size):
+            for node in client.fetch_feedback(lower_bound, end_bound, row.page_size):
                 writer.writerow(flatten_node(node, columns))
-                watermark = watermark_from_node(node, row.finish_date_field_id, watermark)
+                watermark = watermark_from_node(node, row.finish_date_field_id, watermark, field_type=field_type)
                 record_count += 1
         logging.info("Wrote %s record(s) to %s.", record_count, table.name)
         return watermark

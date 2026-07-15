@@ -22,10 +22,10 @@ _GRAPHQL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # MAX_RECORDS_PER_REQUEST = 1000). The configured value is clamped to this.
 MAX_PAGE_SIZE = 1000
 
-# Component-level default page size. Note this differs from the Medallia API default of
-# 30 (applied only when ``first`` is omitted): the component always sends ``first``, and
-# a large page minimises the request count against the 24h quota.
-DEFAULT_PAGE_SIZE = 1000
+# Component-level default page size. Matches the reference extractor's default (100): a
+# modest page is gentler on the live instance / 24h quota than the API ceiling while still
+# keeping the request count low. Still clamped to ``MAX_PAGE_SIZE``.
+DEFAULT_PAGE_SIZE = 100
 
 DEFAULT_FINISH_DATE_FIELD_ID = "k_initialfinishdate_epoch_int"
 
@@ -34,6 +34,20 @@ class DataObject(StrEnum):
     """Supported Medallia data-source root node. v1 ships ``feedback`` only."""
 
     feedback = "feedback"
+
+
+class FinishDateFieldType(StrEnum):
+    """Value format of the finish-date watermark field.
+
+    ``epoch``    — integer epoch-seconds (e.g. ``k_initialfinishdate_epoch_int``); the
+                   default, so existing configs keep their behaviour.
+    ``datetime`` — an ISO 8601 date / datetime string (e.g. ``e_creationdate``,
+                   ``e_responsedate`` with values like ``2026-05-01``). ISO 8601 sorts
+                   correctly lexicographically, so the keyset watermark still advances.
+    """
+
+    epoch = "epoch"
+    datetime = "datetime"
 
 
 class LoadType(StrEnum):
@@ -75,11 +89,19 @@ class RowConfiguration(BaseModel):
     data_object: DataObject = DataObject.feedback
     fields: list[str] = Field(..., min_length=1, description="Field IDs to extract via fieldData(fieldId).")
     finish_date_field_id: str = DEFAULT_FINISH_DATE_FIELD_ID
+    finish_date_field_type: FinishDateFieldType = Field(
+        default=FinishDateFieldType.epoch,
+        description="Value format of finish_date_field_id: 'epoch' (integer seconds) or 'datetime' (ISO string).",
+    )
     survey_id_field_id: str = Field(..., description="Field ID used as the survey identifier / primary key.")
     filters: dict | None = Field(default=None, description="Optional Medallia business filter tree.")
     page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1)
     initial_start_epoch: int | None = Field(
-        default=None, description="First-run lower bound (finish-date epoch seconds) when state is empty."
+        default=None, description="First-run lower bound (finish-date epoch seconds) for an epoch watermark field."
+    )
+    initial_start_value: str | None = Field(
+        default=None,
+        description="First-run lower bound as an ISO date/datetime string for a 'datetime' watermark field.",
     )
     load_type: LoadType = LoadType.incremental_load
 
@@ -116,13 +138,24 @@ class RowConfiguration(BaseModel):
 
     @property
     def output_columns(self) -> list[str]:
-        """Output column set: surveyId + watermark finish field + configured fields (deduped)."""
-        columns = ["surveyId", self.finish_date_field_id]
-        reserved = {self.survey_id_field_id, self.finish_date_field_id}
+        """Output column set: node id + surveyId + watermark finish field + configured fields (deduped).
+
+        ``id`` is the node's direct scalar identifier (selected alongside the survey field) and
+        gives every record a stable identity independent of the configured survey field.
+        """
+        columns = ["id", "surveyId", self.finish_date_field_id]
+        reserved = {self.survey_id_field_id, self.finish_date_field_id, "id", "surveyId"}
         for field_id in self.fields:
             if field_id not in reserved and field_id not in columns:
                 columns.append(field_id)
         return columns
+
+    @property
+    def initial_start(self) -> int | str | None:
+        """First-run lower-bound value matching the configured watermark field format."""
+        if self.finish_date_field_type == FinishDateFieldType.datetime:
+            return self.initial_start_value
+        return self.initial_start_epoch
 
 
 def _format_validation_error(error: ValidationError) -> str:

@@ -29,24 +29,45 @@ SRC_DIR = REPO_ROOT / "src"
 FIXTURES = Path(__file__).resolve().parent / "data"
 
 # Fabricated feedback nodes (oldest → newest); aliases match the query builder selection.
+# ``id`` is the node's direct scalar identifier (selected alongside the survey field).
 _FEEDBACK_NODES = [
     {
+        "id": "F100",
         "surveyId": {"values": ["S100"]},
         "k_fin": {"values": ["1704153600"]},
         "e_nps": {"values": ["9"]},
         "e_comment": {"values": ["Great"]},
     },
     {
+        "id": "F101",
         "surveyId": {"values": ["S101"]},
         "k_fin": {"values": ["1704240000"]},
         "e_nps": {"values": ["7"]},
         "e_comment": {"values": ["Okay"]},
     },
     {
+        "id": "F102",
         "surveyId": {"values": ["S102"]},
         "k_fin": {"values": ["1704326400"]},
         "e_nps": {"values": ["3"]},
         "e_comment": {"values": ["Poor"]},
+    },
+]
+
+# Fabricated nodes for a DATETIME/ISO watermark field (values like "2026-05-01"); a
+# non-fatal "Invalid field id:" error accompanies the valid data (must be tolerated).
+_DATETIME_NODES = [
+    {
+        "id": "F200",
+        "surveyId": {"values": ["S200"]},
+        "e_creationdate": {"values": ["2026-05-01T08:00:00Z"]},
+        "e_comment": {"values": ["Early"]},
+    },
+    {
+        "id": "F201",
+        "surveyId": {"values": ["S201"]},
+        "e_creationdate": {"values": ["2026-05-02T09:30:00Z"]},
+        "e_comment": {"values": ["Later"]},
     },
 ]
 
@@ -66,6 +87,19 @@ def _fake_post(self, url, **kwargs):
     if url.endswith("/token"):
         return _FakeResponse(200, {"access_token": "fake-token", "expires_in": 3600})
     return _FakeResponse(200, {"data": {"feedback": {"totalCount": len(_FEEDBACK_NODES), "nodes": _FEEDBACK_NODES}}})
+
+
+def _fake_post_datetime(self, url, **kwargs):
+    """Datetime-watermark page carrying a tolerated ``Invalid field id:`` error alongside data."""
+    if url.endswith("/token"):
+        return _FakeResponse(200, {"access_token": "fake-token", "expires_in": 3600})
+    return _FakeResponse(
+        200,
+        {
+            "data": {"feedback": {"totalCount": len(_DATETIME_NODES), "nodes": _DATETIME_NODES}},
+            "errors": [{"message": "Invalid field id: e_bogus"}],
+        },
+    )
 
 
 class TestDatadirSuccess(unittest.TestCase):
@@ -95,8 +129,10 @@ class TestDatadirSuccess(unittest.TestCase):
         with open(csv_path, newline="") as fh:
             rows = list(csv.DictReader(fh))
         self.assertEqual(len(rows), 3)
-        self.assertEqual(set(rows[0].keys()), {"surveyId", "k_fin", "e_nps", "e_comment"})
+        self.assertEqual(set(rows[0].keys()), {"id", "surveyId", "k_fin", "e_nps", "e_comment"})
         self.assertEqual([r["surveyId"] for r in rows], ["S100", "S101", "S102"])
+        # The node ``id`` scalar is captured per record.
+        self.assertEqual([r["id"] for r in rows], ["F100", "F101", "F102"])
         self.assertEqual(rows[2]["e_comment"], "Poor")
 
         with open(manifest_path) as fh:
@@ -114,6 +150,46 @@ class TestDatadirSuccess(unittest.TestCase):
         # Watermark advanced to the last (newest) record.
         self.assertEqual(state["last_finish_date_epoch"], 1704326400)
         self.assertEqual(state["last_survey_id"], "S102")
+
+
+class TestDatadirDatetimeWatermark(unittest.TestCase):
+    """A DATETIME/ISO watermark field must extract, type, and advance without int() coercion."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="medallia-datetime-")
+        self.addCleanup(shutil.rmtree, self._tmp, True)
+        shutil.copytree(FIXTURES / "test_datetime_watermark", self._tmp, dirs_exist_ok=True)
+        (Path(self._tmp) / "out" / "tables").mkdir(parents=True, exist_ok=True)
+        self._env = mock.patch.dict(os.environ, {"KBC_DATADIR": self._tmp})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    @freeze_time("2026-07-15")
+    @mock.patch("requests.Session.post", new=_fake_post_datetime)
+    def test_datetime_watermark_advances_and_types_as_string(self):
+        Component().run()
+
+        out_tables = Path(self._tmp) / "out" / "tables"
+        csv_path = out_tables / "feedback.csv"
+        manifest_path = out_tables / "feedback.csv.manifest"
+        state_path = Path(self._tmp) / "out" / "state.json"
+
+        with open(csv_path, newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual([r["surveyId"] for r in rows], ["S200", "S201"])
+        self.assertEqual(rows[0]["e_creationdate"], "2026-05-01T08:00:00Z")
+
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        # The datetime watermark column stays STRING — never forced to INTEGER.
+        finish_col = next(col for col in manifest["schema"] if col["name"] == "e_creationdate")
+        self.assertEqual(finish_col["data_type"]["base"]["type"], "STRING")
+
+        with open(state_path) as fh:
+            state = json.load(fh)
+        # Watermark advanced to the newest ISO value (stored verbatim as a string).
+        self.assertEqual(state["last_finish_date_epoch"], "2026-05-02T09:30:00Z")
+        self.assertEqual(state["last_survey_id"], "S201")
 
 
 class TestDatadirFailure(unittest.TestCase):
