@@ -463,6 +463,25 @@ class TestConfiguration(unittest.TestCase):
         with self.assertRaises(UserException):
             Configuration(**params)
 
+    def test_validation_error_message_names_field_without_leaking_secret(self):
+        # Security regression: the UserException message built from a ValidationError must
+        # name the offending field but never echo any config value — above all the decrypted
+        # #client_secret. The chained ValidationError (whose input_value holds the secret)
+        # must also be suppressed (raised ``from None``).
+        sentinel = "SENTINEL_SECRET_DO_NOT_LEAK"
+        params = _valid_params(**{"#client_secret": sentinel})
+        del params["instance_host"]
+        with self.assertRaises(UserException) as ctx:
+            Configuration(**params)
+        message = str(ctx.exception)
+        self.assertIn("instance_host", message)
+        self.assertNotIn(sentinel, message)
+        # No config values at all leak into the message.
+        self.assertNotIn(INSTANCE_HOST, message)
+        self.assertNotIn(COMPANY, message)
+        # The chained ValidationError (carrying input_value) is not attached.
+        self.assertIsNone(ctx.exception.__cause__)
+
     def test_page_size_clamped(self):
         row = RowConfiguration(**_valid_params(page_size=5000))
         self.assertEqual(row.page_size, MAX_PAGE_SIZE)

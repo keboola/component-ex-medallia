@@ -78,7 +78,12 @@ class Configuration(BaseModel):
         try:
             super().__init__(**data)
         except ValidationError as e:
-            raise UserException(_format_validation_error(e)) from e
+            # ``from None`` (never ``from e``): a Pydantic ValidationError carries
+            # ``input_value`` — the full merged config, including the decrypted
+            # ``#client_secret`` and tenant host. Chaining it would surface that value in
+            # the traceback that ``logging.exception`` prints to the customer-visible job
+            # log. Suppress the chain and raise a value-free message instead.
+            raise UserException(_format_validation_error(e)) from None
 
 
 class RowConfiguration(BaseModel):
@@ -109,7 +114,9 @@ class RowConfiguration(BaseModel):
         try:
             super().__init__(**data)
         except ValidationError as e:
-            raise UserException(_format_validation_error(e)) from e
+            # See Configuration.__init__: ``from None`` keeps the decrypted secret /
+            # config in the chained ValidationError's ``input_value`` out of the log.
+            raise UserException(_format_validation_error(e)) from None
 
     @field_validator("fields")
     @classmethod
@@ -159,8 +166,16 @@ class RowConfiguration(BaseModel):
 
 
 def _format_validation_error(error: ValidationError) -> str:
+    """Build a user-actionable message from a ValidationError WITHOUT echoing any value.
+
+    Only the field location, the human-readable message and the error type are used.
+    ``include_input=False`` / ``include_url=False`` guarantee the per-error dicts never
+    carry ``input`` (the offending value — which for this config is the decrypted
+    ``#client_secret`` and tenant details), so a value can never leak into the message
+    even if this function is edited later.
+    """
     messages = []
-    for err in error.errors():
+    for err in error.errors(include_input=False, include_url=False):
         location = ".".join(str(part) for part in err["loc"]) or "configuration"
-        messages.append(f"{location}: {err['msg']}")
-    return f"Configuration validation error: {'; '.join(messages)}"
+        messages.append(f"field '{location}' — {err['msg']} ({err['type']})")
+    return f"Invalid configuration: {'; '.join(messages)}"

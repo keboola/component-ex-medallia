@@ -205,6 +205,43 @@ class TestDatadirFailure(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
 
 
+class TestConfigErrorSecretLeakGuard(unittest.TestCase):
+    """Security regression: a config-validation failure must NOT leak the decrypted secret.
+
+    The fixture carries a recognizable ``#client_secret`` sentinel and is missing a required
+    field, so config parsing raises. The component is run as a subprocess (the real platform
+    execution path, where ``logging.exception`` prints the active exception to stderr / the
+    job log). We assert the sentinel appears NOWHERE in stdout/stderr — proving the Pydantic
+    ValidationError's ``input_value`` (which holds the decrypted secret) is not chained into
+    the traceback — while the offending field is still named so the error stays actionable.
+    """
+
+    SENTINEL = "SENTINEL_SECRET_DO_NOT_LEAK"
+
+    def test_config_error_does_not_leak_secret(self):
+        env = dict(os.environ)
+        env["KBC_DATADIR"] = str(FIXTURES / "test_secret_leak_guard")
+        result = subprocess.run(
+            [sys.executable, str(SRC_DIR / "component.py")],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        combined = result.stdout + result.stderr
+        # User error → exit 1 (message shown to the user).
+        self.assertEqual(result.returncode, 1)
+        # The decrypted secret sentinel must not appear anywhere in the output.
+        self.assertNotIn(self.SENTINEL, combined)
+        # Deterministic leak markers: a rendered Pydantic ValidationError ALWAYS prints
+        # ``input_value=`` (the offending value — Pydantic truncates it, so the sentinel
+        # check alone is not sufficient). Its absence proves the ValidationError was not
+        # chained into the traceback / message.
+        self.assertNotIn("input_value", combined)
+        self.assertNotIn("ValidationError", combined)
+        # The error must still name the offending field so it is user-actionable.
+        self.assertIn("instance_host", combined)
+
+
 class TestNoConfig(unittest.TestCase):
     @freeze_time("2010-10-10")
     @mock.patch.dict(os.environ, {"KBC_DATADIR": "./non-existing-dir"})
