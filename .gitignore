@@ -15,8 +15,13 @@ venv
 
 # vcr datadirtesting
 secrets.json
+# Recorded VCR cassettes hold live customer data — NEVER commit them.
+# The entire generated functional tree is local-only (test CODE lives in tests/*.py).
+tests/functional/
 tests/functional/*/source/data/out/
 tests/functional/*/source/data/in/
+# Stray datadir test output (datadir tests run in a tempdir, but guard anyway).
+tests/data/*/out/
 
 # component-factory lifecycle tracker (local only, never committed)
 docs/superpowers/*-lifecycle.md

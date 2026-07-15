@@ -24,6 +24,30 @@ from client import (
 )
 from configuration import Configuration, RowConfiguration
 
+# VCR sanitizers — picked up automatically by the keboola.datadirtest scaffolder while
+# RECORDING cassettes. keboola.vcr ships only inside keboola.datadirtest (a dev-only
+# dependency), so it is absent from the production image (`uv sync --no-dev`); the guard
+# keeps the production import clean. DefaultSanitizer already redacts client_id/
+# client_secret/access_token/token/password; the extra fields cover this component's own
+# credential/tenant parameter names so no real value can leak into a recorded cassette.
+try:
+    from keboola.vcr import DefaultSanitizer
+
+    VCR_SANITIZERS = [
+        DefaultSanitizer(
+            additional_sensitive_fields=[
+                "company",
+                "company_name",
+                "username",
+                "#password",
+                "#client_secret",
+                "client_secret",
+            ]
+        ),
+    ]
+except ImportError:  # pragma: no cover - production image has no dev dependencies.
+    VCR_SANITIZERS = []
+
 # state.json keys for the composite keyset watermark.
 STATE_LAST_FINISH_DATE_EPOCH = "last_finish_date_epoch"
 STATE_LAST_SURVEY_ID = "last_survey_id"

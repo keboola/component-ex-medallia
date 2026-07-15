@@ -19,7 +19,7 @@ Neither the client secret nor the access token is ever logged.
 import json
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 import requests
@@ -108,7 +108,9 @@ class MedalliaTokenManager:
         """Return a valid token, minting a fresh one when missing or near expiry."""
         if self._access_token is None or time.time() >= (self._expires_at - self._expiry_skew):
             self._mint()
-        return self._access_token  # type: ignore[return-value]
+        if self._access_token is None:  # pragma: no cover - _mint sets the token or raises.
+            raise MedalliaClientError("Medallia token could not be minted.")
+        return self._access_token
 
     def invalidate(self) -> None:
         """Drop the cached token so the next ``get_token`` re-mints (used on a 401)."""
@@ -352,10 +354,10 @@ class MedalliaClient:
     def _backoff_seconds(self, attempt: int) -> float:
         return min(self._backoff_base * (2 ** (attempt - 1)), self._backoff_max)
 
-    def _apply_rate_limit(self, headers: object) -> None:
+    def _apply_rate_limit(self, headers: Mapping[str, str]) -> None:
         """Slow down when a live ``X-RateLimit-Remaining-*`` header approaches zero."""
         for header in ("X-RateLimit-Remaining-second", "X-RateLimit-Remaining-day"):
-            raw = headers.get(header) if hasattr(headers, "get") else None
+            raw = headers.get(header)
             if raw is None:
                 continue
             try:
