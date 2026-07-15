@@ -435,7 +435,7 @@ def _coerce_finish_value(raw: object, field_type: str) -> int | str | None:
         return str(raw)
     try:
         return int(str(raw))
-    except TypeError, ValueError:
+    except (TypeError, ValueError):  # fmt: skip
         return None
 
 
