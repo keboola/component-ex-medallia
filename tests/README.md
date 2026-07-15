@@ -26,17 +26,30 @@ Recorded cases (see `setup/configs.json`):
 - `03_feedback_incremental` — a small live feedback extract for this customer's **datetime**
   watermark schema (`finish_date_field_id=e_creationdate`, `finish_date_field_type=datetime`,
   `survey_id_field_id=a_surveyid`), `page_size=5`, `initial_start_value` ~7 days ago.
+  **Excluded from replay** (see below); kept on disk only as a proof-of-life artifact.
 
-### Recording is hard-capped and gentle
+### How feedback extraction is verified (two layers)
+
+1. **Deterministic regression test** — `tests/test_component.py` runs the full component
+   with the HTTP transport monkeypatched, exercising multi-page/keyset pagination,
+   incremental watermark advance, output table + manifest, and `state.json`. This is the
+   authoritative, always-run feedback test.
+2. **One-time live proof-of-life** — `03_feedback_incremental` was recorded once against the
+   live instance (exit 0, real rows) to prove the datetime schema works end-to-end. It is
+   **not** a replayable regression fixture and is **skipped by `test_functional.py`** (with a
+   `reason=`), so both local and CI `pytest` are fully green.
+
+### Why the feedback recording is hard-capped and not replayable
 
 The live 7-day window holds ~2300 feedback records, so recording was hard-capped to **2
 pages** (10 records) via a temporary `MEDALLIA_MAX_PAGES=2` env guard applied **only during
-recording** (the guard is not part of the shipped code). Because the extract is capped mid-
-pagination, `03_feedback_incremental` **does not replay green** (the un-capped component asks
-for a 3rd page that was intentionally not recorded). That is expected: the cassette is a
-gentle real-data sample proving the datetime extract works end-to-end, not a full replayable
-fixture. To make it replay green, record against a window that naturally yields < `page_size`
-records on the last page.
+recording** (the guard is not part of the shipped code). Medallia's date filter for this
+field accepts only **day granularity** (`YYYY-MM-DD`), so no bounded, terminating cassette is
+possible for a tenant at this volume: any gentle (<= 2 page) capture stops mid-pagination,
+and an un-capped replay would request a page that was deliberately never recorded. Hence
+`test_functional.py` replays only `01_testConnection` and `02_listFields` and skips any
+feedback recording. To obtain a replayable feedback cassette you would need a tenant/window
+that naturally yields fewer than `page_size` records on the last page.
 
 ### To re-record
 
