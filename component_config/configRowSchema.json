@@ -65,12 +65,29 @@
     "finish_date_field_id": {
       "type": "string",
       "title": "Finish Date Field",
-      "description": "Epoch-seconds field ID used as the incremental watermark.",
+      "description": "Field ID used as the incremental watermark (ordering + cursor).",
       "default": "k_initialfinishdate_epoch_int",
       "propertyOrder": 40,
       "options": {
-        "tooltip": "The initial-finish-date field as Unix epoch seconds (default `k_initialfinishdate_epoch_int`). If your instance lacks this computed K-field, use its DATETIME equivalent. Drives both ordering and the incremental cursor."
+        "tooltip": "The finish-date field driving both ordering and the incremental cursor. Default `k_initialfinishdate_epoch_int` is the Unix-epoch-seconds K-field; for a DATETIME field use its field ID and set Finish Date Field Type to Datetime. Entered manually because computed K-fields may not appear in the field metadata list."
       }
+    },
+    "finish_date_field_type": {
+      "type": "string",
+      "title": "Finish Date Field Type",
+      "description": "Value format of the finish date field.",
+      "enum": [
+        "epoch",
+        "datetime"
+      ],
+      "options": {
+        "enum_titles": [
+          "Epoch seconds (integer)",
+          "Datetime (ISO 8601 string)"
+        ]
+      },
+      "default": "epoch",
+      "propertyOrder": 45
     },
     "load_type": {
       "type": "string",
@@ -95,19 +112,34 @@
       "description": "First-run lower bound (finish-date epoch seconds) when no state exists.",
       "propertyOrder": 60,
       "options": {
+        "dependencies": {
+          "finish_date_field_type": "epoch"
+        },
         "tooltip": "Unix epoch seconds. On the first run (empty state) only records with a finish date after this value are fetched. Leave empty to load full history."
+      }
+    },
+    "initial_start_value": {
+      "type": "string",
+      "title": "Initial Start (Datetime)",
+      "description": "First-run lower bound as an ISO date/datetime string when no state exists.",
+      "propertyOrder": 65,
+      "options": {
+        "dependencies": {
+          "finish_date_field_type": "datetime"
+        },
+        "tooltip": "ISO 8601 date (e.g. `2026-01-01`). On the first run (empty state) only records with a finish date after this value are fetched. Leave empty to load full history."
       }
     },
     "page_size": {
       "type": "integer",
       "title": "Page Size",
       "description": "Records per request; capped at the Medallia maximum of 1000.",
-      "default": 1000,
+      "default": 100,
       "minimum": 1,
       "maximum": 1000,
       "propertyOrder": 70,
       "options": {
-        "tooltip": "The `first` argument sent on every query. The component default is 1000 (the Medallia maximum) to minimise request count; note the Medallia API itself defaults to 30 only when `first` is omitted, which never happens here. Values above 1000 are clamped."
+        "tooltip": "The `first` argument sent on every query. Defaults to 100; values above the Medallia maximum of 1000 are clamped."
       }
     },
     "filters": {

@@ -1,1 +1,1 @@
-Enter short description of the component here.
+Extracts feedback and experience records from Medallia Experience Cloud via the Query API.
