@@ -2,12 +2,7 @@
   "storage": {
     "input": {
       "files": [],
-      "tables": [
-        {
-          "source": "in.c-example.example",
-          "destination": "example.csv"
-        }
-      ]
+      "tables": []
     },
     "output": {
       "files": [],
@@ -15,7 +10,17 @@
     }
   },
   "parameters": {
-    "#api_token": "your-secret-token",
-    "debug": false
+    "instance_host": "example.medallia.com",
+    "company_name": "example",
+    "api_host": "example.apis.medallia.com",
+    "client_id": "your-oauth-client-id",
+    "#client_secret": "your-oauth-client-secret",
+    "data_object": "feedback",
+    "fields": ["e_nps", "e_comment"],
+    "survey_id_field_id": "a_surveyid",
+    "finish_date_field_id": "k_initialfinishdate_epoch_int",
+    "finish_date_field_type": "epoch",
+    "load_type": "incremental_load",
+    "page_size": 100
   }
 }

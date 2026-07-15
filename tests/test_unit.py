@@ -19,6 +19,7 @@ from client.medallia_client import (
     flatten_node,
     watermark_from_node,
 )
+from component import Component
 from configuration import MAX_PAGE_SIZE, Configuration, FinishDateFieldType, LoadType, RowConfiguration
 
 INSTANCE_HOST = "instance.example.test"
@@ -132,6 +133,27 @@ class TestTokenManager(unittest.TestCase):
         tm = MedalliaTokenManager(INSTANCE_HOST, COMPANY, CLIENT_ID, CLIENT_SECRET, session=session)
         with self.assertRaises(MedalliaClientError):
             tm.get_token()
+
+    def test_other_4xx_raises_user_exception(self):
+        # A non-401 4xx (wrong host/tenant, or a client lacking token-endpoint access) is a
+        # user-actionable configuration error → UserException (exit 1), never an exit-2 crash.
+        for status in (400, 403, 404):
+            with self.subTest(status=status):
+                session = mock.Mock()
+                session.post.return_value = FakeResponse(status)
+                tm = MedalliaTokenManager(INSTANCE_HOST, COMPANY, CLIENT_ID, CLIENT_SECRET, session=session)
+                with self.assertRaises(UserException):
+                    tm.get_token()
+
+    def test_5xx_raises_client_error(self):
+        # 5xx from the token endpoint stays a MedalliaClientError (exit 2, genuinely unexpected).
+        for status in (500, 503):
+            with self.subTest(status=status):
+                session = mock.Mock()
+                session.post.return_value = FakeResponse(status)
+                tm = MedalliaTokenManager(INSTANCE_HOST, COMPANY, CLIENT_ID, CLIENT_SECRET, session=session)
+                with self.assertRaises(MedalliaClientError):
+                    tm.get_token()
 
     def test_missing_access_token_raises_client_error(self):
         session = mock.Mock()
@@ -353,6 +375,51 @@ class TestClient(unittest.TestCase):
         self.assertEqual(result, {"fields": {"totalCount": 3}})
         self.assertEqual(session.query_calls[0]["params"], {"compute_cost_only": "true"})
 
+    def test_query_4xx_raises_user_exception(self):
+        # A non-retryable 4xx (wrong api_host/path, or no Query API access) is user-actionable.
+        for status in (400, 403, 404):
+            with self.subTest(status=status):
+                session = FakeHTTPSession()
+                session.query_responses = [FakeResponse(status)]
+                client = _make_client(session)
+                with self.assertRaises(UserException):
+                    list(client.fetch_feedback(None, 9999, page_size=5))
+
+    def test_query_non_retryable_5xx_raises_client_error(self):
+        # 501 is a 5xx but NOT in the retryable set → genuinely unexpected (exit 2).
+        session = FakeHTTPSession()
+        session.query_responses = [FakeResponse(501)]
+        client = _make_client(session)
+        with self.assertRaises(MedalliaClientError):
+            list(client.fetch_feedback(None, 9999, page_size=5))
+
+    def test_full_load_no_duplicate_boundary_rows(self):
+        # Page 2 repeats the last node of page 1 — a boundary duplicate the exclusive keyset
+        # filter can still return. It must be dropped so full_load emits each survey once
+        # (under incremental the PK upsert would mask it, but full_load has no such safety net).
+        session = FakeHTTPSession()
+        session.query_responses = [
+            _feedback_page([_node("S1", "100"), _node("S2", "200")], total_count=5),
+            _feedback_page([_node("S2", "200"), _node("S3", "300")], total_count=1),
+        ]
+        client = _make_client(session)
+        nodes = list(client.fetch_feedback(None, end_bound=9999, page_size=2))
+        survey_ids = [node["surveyId"]["values"][0] for node in nodes]
+        self.assertEqual(survey_ids, ["S1", "S2", "S3"])
+
+    def test_page_of_only_boundary_duplicates_terminates(self):
+        # A page whose every node is at/behind the exclusive lower bound yields no forward
+        # progress; the paginator must stop rather than re-issue the identical query forever.
+        session = FakeHTTPSession()
+        session.query_responses = [
+            _feedback_page([_node("S1", "100")], total_count=5),
+            _feedback_page([_node("S1", "100")], total_count=5),
+        ]
+        client = _make_client(session)
+        nodes = list(client.fetch_feedback(None, end_bound=9999, page_size=1))
+        self.assertEqual([node["surveyId"]["values"][0] for node in nodes], ["S1"])
+        self.assertEqual(len(session.query_calls), 2)
+
 
 # --------------------------------------------------------------------------------------
 # Helpers
@@ -520,6 +587,91 @@ class TestConfiguration(unittest.TestCase):
         )
         self.assertEqual(row.finish_date_field_type, FinishDateFieldType.datetime)
         self.assertEqual(row.initial_start, "2026-05-01")
+
+
+# --------------------------------------------------------------------------------------
+# Sync actions (testConnection / listFields / _field_label)
+# --------------------------------------------------------------------------------------
+class _StubMetadataClient:
+    """Duck-typed stand-in for the metadata client used by the sync actions."""
+
+    def __init__(self, result=None, error=None):
+        self._result = result if result is not None else {}
+        self._error = error
+        self.calls = []
+
+    def run_metadata_query(self, query, compute_cost_only=False):
+        self.calls.append((query, compute_cost_only))
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _sync_component(client):
+    """A Component wired to a stub metadata client, bypassing ComponentBase init.
+
+    The sync-action methods are invoked via ``__wrapped__`` (set by ``functools.wraps`` on
+    the @sync_action decorator) so the raw method runs directly — the decorator's stdout /
+    exit machinery, which needs a real ``configuration`` (a read-only property), is skipped.
+    """
+    comp = Component.__new__(Component)
+    comp._get_config = lambda: mock.Mock()
+    comp._build_metadata_client = lambda config: client
+    return comp
+
+
+def _run_test_connection(comp):
+    return Component.test_connection.__wrapped__(comp)
+
+
+def _run_list_fields(comp):
+    return Component.list_fields.__wrapped__(comp)
+
+
+class TestSyncActions(unittest.TestCase):
+    def test_test_connection_success(self):
+        client = _StubMetadataClient(result={"fields": {"totalCount": 1}})
+        result = _run_test_connection(_sync_component(client))
+        self.assertIn("succeeded", result.message.lower())
+        # The pre-flight uses compute_cost_only so it validates auth without consuming quota.
+        self.assertEqual(client.calls[0][1], True)
+
+    def test_test_connection_client_error_becomes_user_exception(self):
+        client = _StubMetadataClient(error=MedalliaClientError("gateway 500"))
+        with self.assertRaises(UserException):
+            _run_test_connection(_sync_component(client))
+
+    def test_list_fields_returns_humanized_select_elements(self):
+        client = _StubMetadataClient(
+            result={
+                "fields": {
+                    "nodes": [
+                        {"id": "e_nps", "name": "NPS", "dataType": "NUMBER"},
+                        {"id": "e_comment", "name": "Comment"},
+                        {"name": "no id — skipped"},
+                    ]
+                }
+            }
+        )
+        elements = _run_list_fields(_sync_component(client))
+        self.assertEqual([e.value for e in elements], ["e_nps", "e_comment"])
+        self.assertEqual(elements[0].label, "NPS (NUMBER)")
+        self.assertEqual(elements[1].label, "Comment")
+
+    def test_list_fields_empty_nodes(self):
+        client = _StubMetadataClient(result={"fields": {"nodes": []}})
+        self.assertEqual(_run_list_fields(_sync_component(client)), [])
+
+    def test_list_fields_client_error_becomes_user_exception(self):
+        client = _StubMetadataClient(error=MedalliaClientError("gateway 503"))
+        with self.assertRaises(UserException):
+            _run_list_fields(_sync_component(client))
+
+    def test_field_label(self):
+        self.assertEqual(Component._field_label({"id": "e_nps", "name": "NPS", "dataType": "NUMBER"}), "NPS (NUMBER)")
+        self.assertEqual(Component._field_label({"id": "e_x", "name": "Only Name"}), "Only Name")
+        # No name → falls back to the field id; no dataType → no parenthetical suffix.
+        self.assertEqual(Component._field_label({"id": "e_y"}), "e_y")
 
 
 if __name__ == "__main__":

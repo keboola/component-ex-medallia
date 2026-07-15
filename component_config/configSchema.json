@@ -52,7 +52,13 @@
     "test_connection": {
       "type": "button",
       "format": "test-connection",
-      "propertyOrder": 60
+      "propertyOrder": 60,
+      "options": {
+        "async": {
+          "label": "Test Connection",
+          "action": "testConnection"
+        }
+      }
     }
   }
 }

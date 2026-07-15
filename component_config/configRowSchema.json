@@ -28,20 +28,16 @@
       "format": "select",
       "uniqueItems": true,
       "items": {
-        "type": "string",
-        "enum": [],
-        "format": "select",
-        "options": {
-          "async": {
-            "label": "Load Fields",
-            "action": "listFields",
-            "autoload": true,
-            "cache": true
-          }
-        }
+        "type": "string"
       },
       "propertyOrder": 20,
       "options": {
+        "async": {
+          "label": "Load Fields",
+          "action": "listFields",
+          "autoload": true,
+          "cache": true
+        },
         "tooltip": "Medallia field IDs (e.g. `e_nps`, `a_survey_channel`). Use Load Fields to pick from the instance metadata, or type IDs manually. Each field's values become one output column."
       }
     },

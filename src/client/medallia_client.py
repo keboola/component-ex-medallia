@@ -21,6 +21,7 @@ import logging
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import requests
 from keboola.component.exceptions import UserException
@@ -156,6 +157,16 @@ class MedalliaTokenManager:
                 "Medallia rejected the OAuth credentials (401). Check client_id / #client_secret, "
                 "instance host and company name."
             )
+        if 400 <= response.status_code < 500:
+            # Any other 4xx from the token endpoint is a user-actionable configuration
+            # problem (wrong host/tenant, or a client without permission), not an
+            # unexpected transport fault — surface it as exit 1, not exit 2.
+            raise UserException(
+                f"Medallia token endpoint returned HTTP {response.status_code}. "
+                "Check the instance host and company name (the token URL is "
+                "https://<instance_host>/oauth/<company_name>/token); a 403 means the OAuth "
+                "client may lack access to the token endpoint."
+            )
         if response.status_code >= 400:
             raise MedalliaClientError(f"Medallia token endpoint returned HTTP {response.status_code}.")
 
@@ -233,8 +244,8 @@ class MedalliaQueryBuilder:
             parts.append(f"{field_id}: fieldData(fieldId: {json.dumps(field_id)}) {{ values }}")
         return " ".join(parts)
 
-    def _build_filter(self, lower_bound: Watermark | None, end_bound: int | str) -> dict:
-        clauses: list[dict] = []
+    def _build_filter(self, lower_bound: Watermark | None, end_bound: int | str) -> dict[str, Any]:
+        clauses: list[dict[str, Any]] = []
         if self._business_filters:
             clauses.append(self._business_filters)
         # Upper bound: this run's "now", emitted in the field's own format (str() covers
@@ -286,11 +297,14 @@ class MedalliaClient:
     def query_url(self) -> str:
         return self._query_url
 
-    def fetch_feedback(self, lower_bound: Watermark | None, end_bound: int | str, page_size: int) -> Iterator[dict]:
+    def fetch_feedback(
+        self, lower_bound: Watermark | None, end_bound: int | str, page_size: int
+    ) -> Iterator[dict[str, Any]]:
         """Yield feedback nodes across keyset pages, advancing the in-memory watermark."""
         current = lower_bound
         page_index = 0
         while True:
+            page_lower = current
             query = self._query_builder.build_query(current, end_bound, page_size)
             data_object = self._post_graphql(query)
             page_index += 1
@@ -300,13 +314,43 @@ class MedalliaClient:
 
             if not nodes:
                 break
+            # The composite keyset lower bound is exclusive, but a boundary record equal to
+            # page_lower can still be returned (e.g. the API compares the finish value
+            # inclusively at the page edge). Drop such leading duplicates so no row is emitted
+            # twice. Under incremental load the PK upsert masks a duplicate; under full_load it
+            # would be a genuine duplicate output row, so it must be dropped here for both.
+            nodes = self._drop_boundary_duplicates(nodes, page_lower)
+            if not nodes:
+                # The whole page was boundary duplicates → no forward progress; stop rather
+                # than re-issuing the identical query forever.
+                break
             yield from nodes
             current = self._advance_watermark(nodes[-1], current)
 
             if total_count < page_size:
                 break
 
-    def run_metadata_query(self, query: str, compute_cost_only: bool = False) -> dict:
+    def _drop_boundary_duplicates(
+        self, nodes: list[dict[str, Any]], page_lower: Watermark | None
+    ) -> list[dict[str, Any]]:
+        """Return the suffix of ``nodes`` that sorts strictly after ``page_lower``.
+
+        Nodes arrive ordered by the composite ``(finishDate, surveyId)`` ascending, so any
+        record at or before the page's exclusive lower bound is a boundary duplicate sitting
+        at the head of the page. A node without an extractable watermark cannot be identified
+        as a duplicate and is kept.
+        """
+        if page_lower is None:
+            return nodes
+        finish_field = self._query_builder.finish_date_field_id
+        field_type = self._query_builder.finish_date_field_type
+        for index, node in enumerate(nodes):
+            candidate = watermark_from_node(node, finish_field, None, field_type=field_type)
+            if candidate is None or _is_after(candidate, page_lower):
+                return nodes[index:]
+        return []
+
+    def run_metadata_query(self, query: str, compute_cost_only: bool = False) -> dict[str, Any]:
         """Execute an arbitrary top-level GraphQL query (used by sync actions).
 
         With ``compute_cost_only`` the query is validated and priced without executing or
@@ -314,7 +358,7 @@ class MedalliaClient:
         """
         return self._post_graphql(query, compute_cost_only=compute_cost_only, unwrap_object=False)
 
-    def _advance_watermark(self, node: dict, fallback: Watermark | None) -> Watermark | None:
+    def _advance_watermark(self, node: dict[str, Any], fallback: Watermark | None) -> Watermark | None:
         return watermark_from_node(
             node,
             self._query_builder.finish_date_field_id,
@@ -322,7 +366,7 @@ class MedalliaClient:
             field_type=self._query_builder.finish_date_field_type,
         )
 
-    def _post_graphql(self, query: str, compute_cost_only: bool = False, unwrap_object: bool = True) -> dict:
+    def _post_graphql(self, query: str, compute_cost_only: bool = False, unwrap_object: bool = True) -> dict[str, Any]:
         params = {"compute_cost_only": "true"} if compute_cost_only else None
         payload = self._request_with_retries(query, params)
         self._raise_for_graphql_errors(payload, compute_cost_only=compute_cost_only)
@@ -332,7 +376,7 @@ class MedalliaClient:
             return data
         return data.get(self._query_builder.data_object) or {}
 
-    def _request_with_retries(self, query: str, params: dict | None) -> dict:
+    def _request_with_retries(self, query: str, params: dict[str, str] | None) -> dict[str, Any]:
         attempt = 0
         reminted = False
         while True:
@@ -371,6 +415,14 @@ class MedalliaClient:
                 self._sleep(self._retry_delay(response, attempt))
                 continue
 
+            if 400 <= response.status_code < 500:
+                # A non-retryable 4xx (e.g. 400/404 wrong api_host or query path, 403 no
+                # Query-API access) is user-actionable → exit 1, not an exit-2 crash.
+                raise UserException(
+                    f"Medallia Query API returned HTTP {response.status_code}. "
+                    "Check the API host (requests go to https://<api_host>/data/v0/query); "
+                    "a 403 means the OAuth client may lack Query API access."
+                )
             if response.status_code >= 400:
                 raise MedalliaClientError(f"Medallia returned unexpected HTTP {response.status_code}.")
 
@@ -378,7 +430,7 @@ class MedalliaClient:
             return response.json()
 
     @staticmethod
-    def _raise_for_graphql_errors(payload: dict, compute_cost_only: bool = False) -> None:
+    def _raise_for_graphql_errors(payload: dict[str, Any], compute_cost_only: bool = False) -> None:
         """Raise on real GraphQL errors; tolerate known non-fatal ones.
 
         Two Medallia messages arrive through ``errors[]`` but are not failures:
@@ -471,7 +523,7 @@ def _is_after(candidate: Watermark, current: Watermark) -> bool:
 
 
 def watermark_from_node(
-    node: dict,
+    node: dict[str, Any],
     finish_date_field_id: str,
     fallback: Watermark | None = None,
     field_type: str = FINISH_FIELD_TYPE_EPOCH,
@@ -495,7 +547,7 @@ def watermark_from_node(
     return candidate if _is_after(candidate, fallback) else fallback
 
 
-def flatten_node(node: dict, columns: list[str]) -> dict:
+def flatten_node(node: dict[str, Any], columns: list[str]) -> dict[str, Any]:
     """Map one GraphQL node to one output row.
 
     ``fieldData`` columns arrive as ``{"values": [...]}`` — single-element → scalar, empty →

@@ -8,6 +8,7 @@ per-row incremental watermark in ``state.json`` only after a successful table wr
 import csv
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from keboola.component.base import ComponentBase, sync_action
 from keboola.component.dao import BaseType, ColumnDefinition, TableDefinition
@@ -16,6 +17,7 @@ from keboola.component.sync_actions import SelectElement, ValidationResult
 
 from client import (
     MedalliaClient,
+    MedalliaClientError,
     MedalliaQueryBuilder,
     MedalliaTokenManager,
     Watermark,
@@ -238,7 +240,12 @@ class Component(ComponentBase):
         config = self._get_config()
         client = self._build_metadata_client(config)
         # compute_cost_only validates auth + query at the gateway without consuming quota.
-        client.run_metadata_query("query { fields(first: 1) { totalCount } }", compute_cost_only=True)
+        # A MedalliaClientError (transport/5xx) would otherwise escape as an exit-2 crash;
+        # convert it to a UserException so the button shows a clean failure Alert instead.
+        try:
+            client.run_metadata_query("query { fields(first: 1) { totalCount } }", compute_cost_only=True)
+        except MedalliaClientError as exc:
+            raise UserException(f"Connection to Medallia Query API failed: {exc}") from None
         return ValidationResult("Connection to Medallia Query API succeeded.")
 
     @sync_action("listFields")
@@ -248,12 +255,17 @@ class Component(ComponentBase):
         client = self._build_metadata_client(config)
         # first: 1000 — the fields node otherwise defaults to Medallia's 30-record page,
         # truncating the catalog offered for UI selection. 1000 matches MAX_PAGE_SIZE.
-        result = client.run_metadata_query("query { fields(first: 1000) { nodes { id name dataType } } }")
+        # As in test_connection, a transport/5xx MedalliaClientError is converted to a
+        # UserException so the dropdown surfaces a clean error rather than crashing with exit 2.
+        try:
+            result = client.run_metadata_query("query { fields(first: 1000) { nodes { id name dataType } } }")
+        except MedalliaClientError as exc:
+            raise UserException(f"Could not load Medallia fields: {exc}") from None
         nodes = ((result.get("fields") or {}).get("nodes")) or []
         return [SelectElement(value=node["id"], label=self._field_label(node)) for node in nodes if node.get("id")]
 
     @staticmethod
-    def _field_label(node: dict) -> str:
+    def _field_label(node: dict[str, Any]) -> str:
         name = node.get("name") or node["id"]
         data_type = node.get("dataType")
         return f"{name} ({data_type})" if data_type else name
