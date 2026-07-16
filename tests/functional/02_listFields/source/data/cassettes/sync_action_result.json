@@ -1,0 +1,1 @@
+[{"value": "a_surveyid", "label": "Survey ID (STRING)"}, {"value": "e_creationdate", "label": "Creation Date (DATE)"}, {"value": "e_nps", "label": "NPS Score (INTEGER)"}, {"value": "e_comment", "label": "Comment (STRING)"}, {"value": "a_survey_channel", "label": "Survey Channel (STRING)"}]

@@ -1,0 +1,115 @@
+{
+  "_metadata": {
+    "freeze_time": "2026-07-15T17:04:33",
+    "keboola_vcr_version": "0.5.0",
+    "recorded_at": "2026-07-15T15:04:37.390933+00:00"
+  },
+  "interactions": [
+    {
+      "request": {
+        "body": "grant_type=client_credentials",
+        "headers": {
+          "Accept": [
+            "*/*"
+          ],
+          "Content-Length": [
+            "29"
+          ],
+          "Content-Type": [
+            "application/x-www-form-urlencoded"
+          ]
+        },
+        "method": "POST",
+        "uri": "https://instance-host.redacted/oauth/company/token"
+      },
+      "response": {
+        "body": {
+          "string": "{\"access_token\": \"REDACTED\", \"token_type\": \"Bearer\", \"expires_in\": 3600}"
+        },
+        "headers": {
+          "Content-Length": [
+            "91"
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": {
+          "code": 200,
+          "message": "OK"
+        }
+      }
+    },
+    {
+      "request": {
+        "body": "{\"query\": \"query { feedback(first: 5, filter: {and: [{fieldIds: [\\\"e_creationdate\\\"], lt: \\\"2026-07-15\\\"}, {or: [{fieldIds: [\\\"e_creationdate\\\"], gt: \\\"2026-07-08\\\"}, {and: [{fieldIds: [\\\"e_creationdate\\\"], gte: \\\"2026-07-08\\\"}, {fieldIds: [\\\"a_surveyid\\\"], gt: \\\"-1\\\"}]}]}]}, orderBy: [{fieldId: \\\"e_creationdate\\\", direction: ASC}, {fieldId: \\\"a_surveyid\\\", direction: ASC}]) { totalCount nodes { id surveyId: fieldData(fieldId: \\\"a_surveyid\\\") { values } e_creationdate: fieldData(fieldId: \\\"e_creationdate\\\") { values } a_customerid: fieldData(fieldId: \\\"a_customerid\\\") { values } e_accepteddate: fieldData(fieldId: \\\"e_accepteddate\\\") { values } } } }\"}",
+        "headers": {
+          "Accept": [
+            "*/*"
+          ],
+          "Content-Length": [
+            "659"
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "method": "POST",
+        "uri": "https://api-host.redacted/data/v0/query"
+      },
+      "response": {
+        "body": {
+          "string": "{\"data\": {\"feedback\": {\"totalCount\": 8, \"nodes\": [{\"id\": \"RESP-0001\", \"surveyId\": {\"values\": [\"SURVEY-0001\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:01\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0001\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:01\"]}}, {\"id\": \"RESP-0002\", \"surveyId\": {\"values\": [\"SURVEY-0002\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:02\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0002\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:02\"]}}, {\"id\": \"RESP-0003\", \"surveyId\": {\"values\": [\"SURVEY-0003\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:03\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0003\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:03\"]}}, {\"id\": \"RESP-0004\", \"surveyId\": {\"values\": [\"SURVEY-0004\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:04\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0004\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:04\"]}}, {\"id\": \"RESP-0005\", \"surveyId\": {\"values\": [\"SURVEY-0005\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:05\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0005\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:05\"]}}]}}, \"errors\": null, \"_allowed\": [\"POST\"]}"
+        },
+        "headers": {
+          "content-length": [
+            "1044"
+          ],
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "status": {
+          "code": 200,
+          "message": "OK"
+        }
+      }
+    },
+    {
+      "request": {
+        "body": "{\"query\": \"query { feedback(first: 5, filter: {and: [{fieldIds: [\\\"e_creationdate\\\"], lt: \\\"2026-07-15\\\"}, {or: [{fieldIds: [\\\"e_creationdate\\\"], gt: \\\"2026-07-09 00:00:05\\\"}, {and: [{fieldIds: [\\\"e_creationdate\\\"], gte: \\\"2026-07-09 00:00:05\\\"}, {fieldIds: [\\\"a_surveyid\\\"], gt: \\\"SURVEY-0005\\\"}]}]}]}, orderBy: [{fieldId: \\\"e_creationdate\\\", direction: ASC}, {fieldId: \\\"a_surveyid\\\", direction: ASC}]) { totalCount nodes { id surveyId: fieldData(fieldId: \\\"a_surveyid\\\") { values } e_creationdate: fieldData(fieldId: \\\"e_creationdate\\\") { values } a_customerid: fieldData(fieldId: \\\"a_customerid\\\") { values } e_accepteddate: fieldData(fieldId: \\\"e_accepteddate\\\") { values } } } }\"}",
+        "headers": {
+          "Accept": [
+            "*/*"
+          ],
+          "Content-Length": [
+            "682"
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "method": "POST",
+        "uri": "https://api-host.redacted/data/v0/query"
+      },
+      "response": {
+        "body": {
+          "string": "{\"data\": {\"feedback\": {\"totalCount\": 3, \"nodes\": [{\"id\": \"RESP-0006\", \"surveyId\": {\"values\": [\"SURVEY-0006\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:06\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0006\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:06\"]}}, {\"id\": \"RESP-0007\", \"surveyId\": {\"values\": [\"SURVEY-0007\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:07\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0007\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:07\"]}}, {\"id\": \"RESP-0008\", \"surveyId\": {\"values\": [\"SURVEY-0008\"]}, \"e_creationdate\": {\"values\": [\"2026-07-09 00:00:08\"]}, \"a_customerid\": {\"values\": [\"synthetic-a_customerid-0008\"]}, \"e_accepteddate\": {\"values\": [\"2026-07-09 00:00:08\"]}}]}}, \"errors\": null, \"_allowed\": [\"POST\"]}"
+        },
+        "headers": {
+          "content-length": [
+            "1043"
+          ],
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "status": {
+          "code": 200,
+          "message": "OK"
+        }
+      }
+    }
+  ],
+  "version": 1
+}

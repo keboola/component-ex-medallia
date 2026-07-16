@@ -14,12 +14,13 @@ venv
 /data
 
 # vcr datadirtesting
+# Live credentials — NEVER commit.
 secrets.json
-# Recorded VCR cassettes hold live customer data — NEVER commit them.
-# The entire generated functional tree is local-only (test CODE lives in tests/*.py).
-tests/functional/
+# The sanitized VCR cassettes ARE committed: every recorded value is deterministic
+# synthetic data (see MedalliaResponseBodySanitizer in src/component.py), so the
+# functional tree is safe and serves as the committable replay regression suite.
+# Only the per-run OUTPUT dir is excluded — it is regenerated on every replay.
 tests/functional/*/source/data/out/
-tests/functional/*/source/data/in/
 # Stray datadir test output (datadir tests run in a tempdir, but guard anyway).
 tests/data/*/out/
 

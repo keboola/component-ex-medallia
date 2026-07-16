@@ -6,6 +6,7 @@ per-row incremental watermark in ``state.json`` only after a successful table wr
 """
 
 import csv
+import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -33,7 +34,113 @@ from configuration import Configuration, FinishDateFieldType, RowConfiguration
 # client_secret/access_token/token/password; the extra fields cover this component's own
 # credential/tenant parameter names so no real value can leak into a recorded cassette.
 try:
-    from keboola.vcr import DefaultSanitizer, UrlPatternSanitizer
+    from keboola.vcr import BaseSanitizer, DefaultSanitizer, UrlPatternSanitizer
+
+    class MedalliaResponseBodySanitizer(BaseSanitizer):
+        """Overwrite Query API response payloads with deterministic synthetic data.
+
+        Feedback ``e_comment`` (and any free-text verbatim field) can contain arbitrary
+        customer PII, so a denylist is unsafe: this REPLACES every value rather than
+        redacting known-bad ones, making a recorded cassette clean BY CONSTRUCTION and
+        verifiable by allowlist. Two response shapes are handled, everything else passes
+        through untouched:
+
+        * ``data.<object>.nodes[]`` feedback rows — the node ``id`` becomes ``RESP-####``
+          and every ``fieldData`` alias's ``values`` are overwritten with a synthetic value
+          chosen from the alias name (no customer specifics are hard-coded).
+        * ``data.fields.nodes[]`` field catalogue (``listFields``) — the real catalogue is
+          replaced wholesale with a small generic field set, dropping any company-substring
+          field IDs.
+
+        Stateful: node numbering is sequential across every response of one recording, so
+        the synthetic finish-date / survey-id watermark stays monotonic and keyset
+        pagination still terminates naturally.
+        """
+
+        SYNTHETIC_COMMENT = "Synthetic feedback comment."
+        _SYNTHETIC_FIELD_CATALOG = [
+            {"id": "a_surveyid", "name": "Survey ID", "dataType": "STRING"},
+            {"id": "e_creationdate", "name": "Creation Date", "dataType": "DATE"},
+            {"id": "e_nps", "name": "NPS Score", "dataType": "INTEGER"},
+            {"id": "e_comment", "name": "Comment", "dataType": "STRING"},
+            {"id": "a_survey_channel", "name": "Survey Channel", "dataType": "STRING"},
+        ]
+
+        def __init__(self) -> None:
+            self._node_counter = 0
+
+        def before_record_response(self, response: dict) -> dict:
+            body = response.get("body")
+            if not isinstance(body, dict) or "string" not in body:
+                return response
+            raw = body["string"]
+            is_bytes = isinstance(raw, bytes)
+            text = raw.decode("utf-8", "ignore") if is_bytes else raw
+            # Cheap pre-filter: only Query API payloads with node lists are of interest.
+            if not isinstance(text, str) or '"data"' not in text or '"nodes"' not in text:
+                return response
+            try:
+                payload = json.loads(text)
+            except ValueError, TypeError:
+                return response
+            if not self._synthesize(payload):
+                return response
+            new_text = json.dumps(payload)
+            body["string"] = new_text.encode("utf-8") if is_bytes else new_text
+            return response
+
+        def _synthesize(self, payload: dict) -> bool:
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                return False
+            changed = False
+            for obj in data.values():
+                if not isinstance(obj, dict):
+                    continue
+                nodes = obj.get("nodes")
+                if not isinstance(nodes, list) or not nodes:
+                    continue
+                if self._is_field_catalog(nodes):
+                    obj["nodes"] = [dict(field) for field in self._SYNTHETIC_FIELD_CATALOG]
+                    if "totalCount" in obj:
+                        obj["totalCount"] = len(obj["nodes"])
+                    changed = True
+                else:
+                    for node in nodes:
+                        if isinstance(node, dict):
+                            self._synthesize_node(node)
+                            changed = True
+            return changed
+
+        @staticmethod
+        def _is_field_catalog(nodes: list) -> bool:
+            head = nodes[0]
+            return isinstance(head, dict) and "dataType" in head and "values" not in head
+
+        def _synthesize_node(self, node: dict) -> None:
+            self._node_counter += 1
+            n = self._node_counter
+            for key, value in node.items():
+                if isinstance(value, dict) and "values" in value:
+                    value["values"] = self._synthetic_values(key, n)
+                elif key == "id":
+                    node[key] = f"RESP-{n:04d}"
+
+        def _synthetic_values(self, alias: str, n: int) -> list[str]:
+            a = alias.lower()
+            if alias == "surveyId" or a.endswith("surveyid"):
+                return [f"SURVEY-{n:04d}"]
+            if "comment" in a or "verbatim" in a or "text" in a:
+                return [self.SYNTHETIC_COMMENT]
+            if "nps" in a or "score" in a or "rating" in a:
+                return ["9"]
+            if "date" in a:
+                return [f"2026-07-09 00:00:{n % 60:02d}"]
+            if "channel" in a:
+                return ["web"]
+            if "email" in a:
+                return [f"user{n:04d}@example.com"]
+            return [f"synthetic-{alias}-{n:04d}"]
 
     VCR_SANITIZERS = [
         DefaultSanitizer(
@@ -60,6 +167,9 @@ try:
                 (r"/oauth/[^/]+/token", "/oauth/company/token"),
             ]
         ),
+        # Response-body PII scrub: overwrite every feedback value / field-catalogue entry
+        # with synthetic data so a recording can never carry real customer feedback.
+        MedalliaResponseBodySanitizer(),
     ]
 except ImportError:  # pragma: no cover - production image has no dev dependencies.
     VCR_SANITIZERS = []
