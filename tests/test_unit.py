@@ -202,6 +202,16 @@ class TestQueryBuilder(unittest.TestCase):
         self.assertIn("surveyId: fieldData", query)
         self.assertIn("c1: fieldData", query)
 
+    def test_reserved_alias_field_ids_not_duplicated(self):
+        # A configured field literally named ``id`` or ``surveyId`` collides with the reserved
+        # response keys (the bare ``id`` scalar and the ``surveyId`` survey alias). It must NOT
+        # emit a second selection for that key — a non-mergeable duplicate is a GraphQL error.
+        query = self._builder(fields=["id", "surveyId", "c1"]).build_query(None, 2000, 10)
+        self.assertNotIn('fieldData(fieldId: "id")', query)
+        self.assertNotIn('fieldData(fieldId: "surveyId")', query)
+        self.assertEqual(query.count("surveyId: fieldData"), 1)
+        self.assertIn("c1: fieldData", query)
+
     def test_order_by_ascending_composite(self):
         query = self._builder().build_query(None, 2000, 10)
         self.assertIn('fieldId: "k_fin", direction: ASC', query)
@@ -419,6 +429,37 @@ class TestClient(unittest.TestCase):
         nodes = list(client.fetch_feedback(None, end_bound=9999, page_size=1))
         self.assertEqual([node["surveyId"]["values"][0] for node in nodes], ["S1"])
         self.assertEqual(len(session.query_calls), 2)
+
+    def test_non_advancing_cursor_terminates(self):
+        # A full page (totalCount >= page_size) whose node yields no extractable watermark
+        # (empty surveyId) leaves the cursor unmoved. The fail-safe must stop rather than
+        # re-issue the identical query forever — only one page is queued, so a re-issue would
+        # raise IndexError.
+        session = FakeHTTPSession()
+        no_watermark = {"surveyId": {"values": []}, "k_fin": {"values": ["100"]}, "c1": {"values": ["x"]}}
+        session.query_responses = [_feedback_page([no_watermark], total_count=5)]
+        client = _make_client(session)
+        nodes = list(client.fetch_feedback(None, end_bound=9999, page_size=1))
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(len(session.query_calls), 1)
+
+    def test_cursor_folds_across_page_when_last_node_lacks_watermark(self):
+        # The last node of a full page has no surveyId, but an earlier node does. The cursor
+        # must advance from the folded page max (not just nodes[-1]), so the next page's query
+        # carries the good node's watermark rather than stalling.
+        session = FakeHTTPSession()
+        no_watermark = {"surveyId": {"values": []}, "k_fin": {"values": ["150"]}, "c1": {"values": ["x"]}}
+        session.query_responses = [
+            _feedback_page([_node("S1", "100"), no_watermark], total_count=5),
+            _feedback_page([], total_count=5),
+        ]
+        client = _make_client(session)
+        nodes = list(client.fetch_feedback(None, end_bound=9999, page_size=2))
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(len(session.query_calls), 2)
+        second_query = session.query_calls[1]["json"]["query"]
+        self.assertIn('"100"', second_query)
+        self.assertIn('"S1"', second_query)
 
 
 # --------------------------------------------------------------------------------------

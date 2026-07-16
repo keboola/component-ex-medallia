@@ -237,7 +237,12 @@ class MedalliaQueryBuilder:
             f"surveyId: fieldData(fieldId: {json.dumps(self._survey_field)}) {{ values }}",
             f"{self._finish_field}: fieldData(fieldId: {json.dumps(self._finish_field)}) {{ values }}",
         ]
-        reserved = {self._survey_field, self._finish_field}
+        # Skip the survey/finish field IDs (already selected above) AND the reserved alias
+        # literals ``id``/``surveyId``: a configured field named ``id`` or ``surveyId`` would
+        # otherwise emit a second, non-mergeable selection for that response key (bare ``id``
+        # vs ``id: fieldData(...)``; two ``surveyId`` aliases with different fieldId args),
+        # which GraphQL rejects. This mirrors ``RowConfiguration.output_columns``' reserved set.
+        reserved = {self._survey_field, self._finish_field, "id", "surveyId"}
         for field_id in self._fields:
             if field_id in reserved:
                 continue
@@ -325,7 +330,22 @@ class MedalliaClient:
                 # than re-issuing the identical query forever.
                 break
             yield from nodes
-            current = self._advance_watermark(nodes[-1], current)
+            # Advance the keyset cursor across EVERY node in the page, not just the last one.
+            # ``watermark_from_node`` is monotonic (it keeps the max of candidate/fallback), so
+            # folding yields the page's greatest extractable watermark even if the final node
+            # happens to lack a surveyId / finish value.
+            for node in nodes:
+                current = self._advance_watermark(node, current)
+            # Fail-safe: if a non-empty page did not move the cursor strictly forward (e.g. no
+            # node had an extractable watermark), stop instead of re-issuing the identical query
+            # forever. Under normal data the cursor always advances and this never triggers.
+            if not _cursor_advanced(current, page_lower):
+                logging.warning(
+                    "Watermark did not advance across a full page of %s node(s); stopping to "
+                    "avoid re-fetching the same page.",
+                    len(nodes),
+                )
+                break
 
             if total_count < page_size:
                 break
@@ -500,6 +520,20 @@ def _coerce_finish_value(raw: object, field_type: str) -> int | str | None:
         return int(str(raw))
     except (TypeError, ValueError):  # fmt: skip
         return None
+
+
+def _cursor_advanced(current: Watermark | None, page_lower: Watermark | None) -> bool:
+    """True if the keyset cursor moved strictly forward over a page.
+
+    ``current`` is the folded cursor after a page, ``page_lower`` the cursor before it.
+    A first page (``page_lower is None``) counts as progress once any real watermark is
+    extracted; a ``None`` ``current`` means no node yielded a usable watermark → no progress.
+    """
+    if current is None:
+        return False
+    if page_lower is None:
+        return True
+    return _is_after(current, page_lower)
 
 
 def _is_after(candidate: Watermark, current: Watermark) -> bool:
