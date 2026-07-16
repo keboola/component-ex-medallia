@@ -130,7 +130,8 @@
           "cache": true
         },
         "dependencies": {
-          "load_type": "incremental_load"
+          "load_type": "incremental_load",
+          "mode": "structured"
         },
         "tooltip": "Date/datetime field (or a sortable numeric timestamp) whose value is tracked as the watermark. The value format is auto-detected — no need to declare it."
       },
@@ -142,7 +143,8 @@
       "description": "First-run lower bound; empty loads full history.",
       "options": {
         "dependencies": {
-          "load_type": "incremental_load"
+          "load_type": "incremental_load",
+          "mode": "structured"
         },
         "tooltip": "Applied only on the first run (empty state). Use an ISO date (e.g. 2026-01-01) for a date field, or epoch seconds for a numeric timestamp field. Leave empty to load full history first."
       },
