@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "stderr": "Medallia token endpoint returned HTTP 400. Check the instance host and company name (the token URL is https://<instance_host>/oauth/<company_name>/token); a 403 means the OAuth client may lack access to the token endpoint.",
+  "logs": []
+}

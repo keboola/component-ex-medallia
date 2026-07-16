@@ -1,0 +1,8 @@
+{
+  "_metadata": {"freeze_time": "2026-07-16T12:00:00", "keboola_vcr_version": "0.5.0", "recorded_at": "2026-07-16T13:52:36.524824+00:00"},
+  "interactions": [
+    {"request": {"body": "grant_type=client_credentials", "headers": {"Accept": ["*/*"], "Content-Length": ["29"], "Content-Type": ["application/x-www-form-urlencoded"]}, "method": "POST", "uri": "https://instance-host.redacted/oauth/company/token"}, "response": {"body": {"string": "{\"access_token\": \"REDACTED\", \"token_type\": \"Bearer\", \"expires_in\": 3600}"}, "headers": {"Content-Length": ["91"], "Content-Type": ["application/json"]}, "status": {"code": 200, "message": "OK"}}},
+    {"request": {"body": "{\"query\": \"query { feedback(first: 5, filter: {and: [{fieldIds: [\\\"e_creationdate\\\"], gt: \\\"2099-01-01\\\"}, {fieldIds: [\\\"e_creationdate\\\"], lt: \\\"2026-07-16\\\"}]}, orderBy: [{fieldId: \\\"e_creationdate\\\", direction: ASC}, {fieldId: \\\"a_surveyid\\\", direction: ASC}]) { totalCount nodes { id surveyId: fieldData(fieldId: \\\"a_surveyid\\\") { values } e_creationdate: fieldData(fieldId: \\\"e_creationdate\\\") { values } a_customerid: fieldData(fieldId: \\\"a_customerid\\\") { values } e_accepteddate: fieldData(fieldId: \\\"e_accepteddate\\\") { values } } } }\"}", "headers": {"Accept": ["*/*"], "Content-Length": ["545"], "Content-Type": ["application/json"]}, "method": "POST", "uri": "https://api-host.redacted/data/v0/query"}, "response": {"body": {"string": "{\"data\":{\"feedback\":{\"totalCount\":0,\"nodes\":[]}},\"errors\":null,\"_allowed\":[\"POST\"]}"}, "headers": {"content-length": ["83"], "content-type": ["application/json"]}, "status": {"code": 200, "message": "OK"}}}
+  ],
+  "version": 1
+}

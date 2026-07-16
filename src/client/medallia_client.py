@@ -288,6 +288,7 @@ class MedalliaClient:
         backoff_base: float = DEFAULT_BACKOFF_BASE_SECONDS,
         backoff_max: float = DEFAULT_BACKOFF_MAX_SECONDS,
         request_timeout: float = 95.0,
+        max_pages: int | None = None,
     ):
         self._query_url = f"https://{api_host}/data/v0/query"
         self._token_manager = token_manager
@@ -297,6 +298,10 @@ class MedalliaClient:
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._request_timeout = request_timeout
+        # Hard ceiling on pages fetched per run (None = unlimited). Unset in production;
+        # set via MEDALLIA_MAX_PAGES to bound the blast radius when recording VCR cassettes
+        # against a live instance. Also a defensive stop against a runaway keyset loop.
+        self._max_pages = max_pages
 
     @property
     def query_url(self) -> str:
@@ -348,6 +353,10 @@ class MedalliaClient:
                 break
 
             if total_count < page_size:
+                break
+
+            if self._max_pages is not None and page_index >= self._max_pages:
+                logging.info("Reached MEDALLIA_MAX_PAGES=%s page cap; stopping pagination.", self._max_pages)
                 break
 
     def _drop_boundary_duplicates(

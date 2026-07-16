@@ -8,7 +8,9 @@ per-row incremental watermark in ``state.json`` only after a successful table wr
 import csv
 import json
 import logging
-from datetime import UTC, datetime
+import os
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from keboola.component.base import ComponentBase, sync_action
@@ -26,6 +28,20 @@ from client import (
     watermark_from_node,
 )
 from configuration import Configuration, FinishDateFieldType, RowConfiguration
+
+# Sanitizer helpers (module level so they exist even when keboola.vcr is absent in the
+# production image). Synthetic date/datetime/epoch values are generated relative to this
+# base so they are strictly increasing in node order and their lexicographic order matches
+# time. The base is chosen so synthetic watermark values sort AFTER the incremental seeds
+# used by the functional tests (which sit before it) and so a first page's rows are never
+# dropped as boundary duplicates on replay.
+_SANITIZER_EPOCH = datetime(2026, 8, 1, tzinfo=UTC)
+_SANITIZER_EPOCH_SECONDS = int(_SANITIZER_EPOCH.timestamp())
+# An all-digit value this long is treated as an epoch timestamp (seconds since 1970 are
+# 10 digits); shorter all-digit values are treated as ordinary small integers.
+_EPOCH_MIN_DIGITS = 9
+_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # VCR sanitizers — picked up automatically by the keboola.datadirtest scaffolder while
 # RECORDING cassettes. keboola.vcr ships only inside keboola.datadirtest (a dev-only
@@ -122,25 +138,60 @@ try:
             n = self._node_counter
             for key, value in node.items():
                 if isinstance(value, dict) and "values" in value:
-                    value["values"] = self._synthetic_values(key, n)
+                    original = value.get("values") or []
+                    value["values"] = self._synthetic_values(key, n, original)
                 elif key == "id":
                     node[key] = f"RESP-{n:04d}"
 
-        def _synthetic_values(self, alias: str, n: int) -> list[str]:
+        def _synthetic_values(self, alias: str, n: int, original: list) -> list[str]:
+            """Replace a field's values with synthetic ones, preserving ARITY and SHAPE.
+
+            One synthetic value is emitted per real value (arity preserved), so a genuinely
+            multi-value field stays multi-value and the ``flatten_node`` join/JSON path is
+            exercised. Each value's SHAPE is inferred from the real value it replaces — an
+            epoch-integer field stays integer, a date/datetime field stays date-shaped — so
+            a watermark field keeps a usable, correctly-typed value. No real value is copied.
+            """
+            count = max(len(original), 1)
+            return [self._synthetic_scalar(alias, n, i, original) for i in range(count)]
+
+        def _synthetic_scalar(self, alias: str, n: int, i: int, original: list) -> str:
             a = alias.lower()
+            # Ordinal unique + monotonic in node order; sub-index i separates multiple
+            # values within one field so a multi-value column has distinct entries.
+            ordinal = n * 100 + i
             if alias == "surveyId" or a.endswith("surveyid"):
-                return [f"SURVEY-{n:04d}"]
+                # Zero-padded so lexicographic order tracks node order (keyset secondary sort).
+                return f"SURVEY-{n:06d}"
+            sample = str(original[i]) if i < len(original) else (str(original[0]) if original else "")
+            shape = self._shape_of(sample)
+            if shape == "epoch":
+                # Monotonic epoch seconds so an epoch watermark advances numerically and
+                # sorts after the tests' epoch seeds (which sit before _SANITIZER_EPOCH).
+                return str(_SANITIZER_EPOCH_SECONDS + ordinal)
+            if shape == "int":
+                return str(ordinal)
+            if shape == "datetime":
+                # Strictly increasing, zero-padded → lexicographic == chronological order.
+                return (_SANITIZER_EPOCH + timedelta(seconds=n)).strftime("%Y-%m-%d %H:%M:%S")
+            if shape == "date":
+                return (_SANITIZER_EPOCH + timedelta(days=n)).strftime("%Y-%m-%d")
             if "comment" in a or "verbatim" in a or "text" in a:
-                return [self.SYNTHETIC_COMMENT]
-            if "nps" in a or "score" in a or "rating" in a:
-                return ["9"]
-            if "date" in a:
-                return [f"2026-07-09 00:00:{n % 60:02d}"]
-            if "channel" in a:
-                return ["web"]
+                return self.SYNTHETIC_COMMENT
             if "email" in a:
-                return [f"user{n:04d}@example.com"]
-            return [f"synthetic-{alias}-{n:04d}"]
+                return f"user{ordinal:06d}@example.com"
+            return f"synthetic-{alias}-{ordinal:06d}"
+
+        @staticmethod
+        def _shape_of(sample: str) -> str:
+            """Classify a real value's shape so the synthetic replacement matches its type."""
+            if _DATETIME_RE.match(sample):
+                return "datetime"
+            if _DATE_RE.match(sample):
+                return "date"
+            if sample.isdigit():
+                return "epoch" if len(sample) >= _EPOCH_MIN_DIGITS else "int"
+            return "text"
 
     VCR_SANITIZERS = [
         DefaultSanitizer(
@@ -241,10 +292,15 @@ class Component(ComponentBase):
             business_filters=row.filters,
             finish_date_field_type=row.finish_date_field_type.value,
         )
+        # MEDALLIA_MAX_PAGES (optional): hard page cap, unset in production. Used to bound
+        # live-instance blast radius while recording VCR cassettes; also a defensive stop.
+        max_pages_env = os.environ.get("MEDALLIA_MAX_PAGES")
+        max_pages = int(max_pages_env) if max_pages_env else None
         return MedalliaClient(
             api_host=config.api_host,
             token_manager=token_manager,
             query_builder=query_builder,
+            max_pages=max_pages,
         )
 
     # -- incremental state -------------------------------------------------------------

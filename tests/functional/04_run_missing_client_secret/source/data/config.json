@@ -1,0 +1,17 @@
+{
+  "action": "run",
+  "parameters": {
+    "instance_host": "example.medallia.com",
+    "api_host": "example.apis.medallia.com",
+    "company_name": "example",
+    "client_id": "DUMMY_CLIENT_ID",
+    "data_object": "feedback",
+    "fields": [
+      "a_customerid"
+    ],
+    "survey_id_field_id": "a_surveyid",
+    "finish_date_field_id": "e_creationdate",
+    "finish_date_field_type": "datetime",
+    "load_type": "incremental_load"
+  }
+}

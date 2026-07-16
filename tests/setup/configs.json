@@ -1,7 +1,7 @@
 [
   {
     "name": "01_testConnection",
-    "description": "testConnection sync action — mints a token and runs a compute_cost_only metadata query (no quota consumed). Real host/company/creds are deep-merged from secrets.json at record time; the dummy *.medallia.com values here are rewritten to fixed placeholders by the URL sanitizer so replay matches.",
+    "description": "testConnection sync action \u2014 token mint + compute_cost_only pre-flight (no quota).",
     "config": {
       "action": "testConnection",
       "parameters": {
@@ -15,7 +15,7 @@
   },
   {
     "name": "02_listFields",
-    "description": "listFields sync action — one metadata call returning the fields node for UI selection.",
+    "description": "listFields sync action \u2014 one metadata call; catalogue replaced by a synthetic field set.",
     "config": {
       "action": "listFields",
       "parameters": {
@@ -28,8 +28,95 @@
     }
   },
   {
-    "name": "03_feedback_incremental",
-    "description": "Minimal live feedback extract for this customer's datetime schema (finish_date_field_id=e_creationdate, type=datetime). page_size=5 and a ~7-day initial_start_value keep the live blast radius tiny; recording is hard-capped at 2 pages via MEDALLIA_MAX_PAGES.",
+    "name": "03_run_missing_instance_host",
+    "description": "run with required root field instance_host missing -> exit 1 (no HTTP).",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "fields": [
+          "a_customerid"
+        ],
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "e_creationdate",
+        "finish_date_field_type": "datetime",
+        "load_type": "incremental_load"
+      }
+    }
+  },
+  {
+    "name": "04_run_missing_client_secret",
+    "description": "run with #client_secret (credentials) missing -> exit 1 (no HTTP).",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "data_object": "feedback",
+        "fields": [
+          "a_customerid"
+        ],
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "e_creationdate",
+        "finish_date_field_type": "datetime",
+        "load_type": "incremental_load"
+      }
+    }
+  },
+  {
+    "name": "05_testConnection_missing_creds",
+    "description": "testConnection with credentials missing -> clean exit 1 (not exit 2).",
+    "config": {
+      "action": "testConnection",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID"
+      }
+    }
+  },
+  {
+    "name": "06_listFields_missing_creds",
+    "description": "listFields with credentials missing -> clean exit 1 (not exit 2).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID"
+      }
+    }
+  },
+  {
+    "name": "07_config_error_secret_leak_guard",
+    "description": "sentinel #client_secret + missing field -> exit 1; secret must not leak (see tests/test_security.py).",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "#client_secret": "SENTINEL_SECRET_DO_NOT_LEAK",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "data_object": "feedback",
+        "fields": [
+          "a_customerid"
+        ],
+        "survey_id_field_id": "a_surveyid",
+        "load_type": "incremental_load"
+      }
+    }
+  },
+  {
+    "name": "08_epoch_watermark",
+    "description": "Epoch watermark: finish=a_initial_finish_timestamp (epoch). Asserts INTEGER typing + advance.",
     "config": {
       "action": "run",
       "parameters": {
@@ -39,13 +126,204 @@
         "client_id": "DUMMY_CLIENT_ID",
         "#client_secret": "DUMMY_CLIENT_SECRET",
         "data_object": "feedback",
-        "fields": ["a_customerid", "e_accepteddate"],
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "a_initial_finish_timestamp",
+        "finish_date_field_type": "epoch",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "page_size": 5,
+        "load_type": "incremental_load",
+        "initial_start_epoch": 1780272000
+      }
+    }
+  },
+  {
+    "name": "09_incremental_resume",
+    "description": "Incremental resume from a seeded in/state.json (see source/set_up.py); watermark advances.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "survey_id_field_id": "a_surveyid",
         "finish_date_field_id": "e_creationdate",
         "finish_date_field_type": "datetime",
-        "survey_id_field_id": "a_surveyid",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
         "page_size": 5,
-        "initial_start_value": "2026-07-08",
         "load_type": "incremental_load"
+      }
+    }
+  },
+  {
+    "name": "10_full_load",
+    "description": "Full load (load_type=full_load): non-incremental manifest + boundary-deduped output.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "e_creationdate",
+        "finish_date_field_type": "datetime",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "page_size": 5,
+        "load_type": "full_load",
+        "initial_start_value": "2026-06-25"
+      }
+    }
+  },
+  {
+    "name": "11_empty_result",
+    "description": "Empty result: an impossible filter -> 0 rows, no lower bound -> state left unchanged.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "e_creationdate",
+        "finish_date_field_type": "datetime",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "page_size": 5,
+        "load_type": "incremental_load",
+        "filters": {
+          "fieldIds": [
+            "e_creationdate"
+          ],
+          "gt": "2099-01-01"
+        }
+      }
+    }
+  },
+  {
+    "name": "12_multi_value_field",
+    "description": "Multi-value field: includes a_recognition_sentiment_types -> JSON-encoded multi-value column.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "e_creationdate",
+        "finish_date_field_type": "datetime",
+        "fields": [
+          "a_recognition_sentiment_types",
+          "a_customerid"
+        ],
+        "page_size": 5,
+        "load_type": "incremental_load",
+        "initial_start_value": "2026-06-25"
+      }
+    }
+  },
+  {
+    "name": "13_business_filters",
+    "description": "Business filters applied (filters=...) and injected into the keyset query.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "e_creationdate",
+        "finish_date_field_type": "datetime",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "page_size": 5,
+        "load_type": "incremental_load",
+        "filters": {
+          "fieldIds": [
+            "e_accepteddate"
+          ],
+          "gt": "2020-01-01"
+        },
+        "initial_start_value": "2026-06-25"
+      }
+    }
+  },
+  {
+    "name": "14_pagination_multi_page",
+    "description": "Pagination across 3 pages (page_size=5, dense epoch field, MEDALLIA_MAX_PAGES=3 cap).",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "data_object": "feedback",
+        "survey_id_field_id": "a_surveyid",
+        "finish_date_field_id": "a_initial_finish_timestamp",
+        "finish_date_field_type": "epoch",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "page_size": 5,
+        "load_type": "incremental_load",
+        "initial_start_epoch": 1780272000
+      }
+    }
+  },
+  {
+    "name": "15_auth_401",
+    "description": "401: one deliberately-wrong #client_secret -> actionable UserException, exit 1.",
+    "config": {
+      "action": "testConnection",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET"
+      }
+    }
+  },
+  {
+    "name": "16_bad_request_4xx",
+    "description": "4xx: an unknown tenant in the token URL -> HTTP 400 -> actionable UserException, exit 1.",
+    "config": {
+      "action": "testConnection",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET"
       }
     }
   }

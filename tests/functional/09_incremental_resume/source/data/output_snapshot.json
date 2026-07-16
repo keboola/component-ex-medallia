@@ -1,0 +1,25 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "feedback.csv": {
+      "columns": [
+        "id",
+        "surveyId",
+        "e_creationdate",
+        "a_customerid",
+        "e_accepteddate"
+      ],
+      "hash": "sha256:b3e8f7397dc4d63c94dd0e7cdcba4dad74714b96e01b85881c76da2ceac7681d",
+      "row_count": 16,
+      "size_bytes": 1097
+    },
+    "feedback.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:54b64214a7d4dc615f7e60d2d3fe40c8bfdcc299ff79cc16c035cffb7fe74824",
+      "row_count": null,
+      "size_bytes": 906
+    }
+  },
+  "version": "1.0"
+}

@@ -3,12 +3,11 @@
 The cassettes committed under ``tests/functional/*/`` contain ONLY deterministic
 synthetic data — every real customer value was overwritten during sanitization (see
 ``MedalliaResponseBodySanitizer`` in ``src/component.py`` and ``tests/README.md``). Each
-case replays with no live network access:
-
-* ``01_testConnection`` — token + compute-cost-only pre-flight (sync action).
-* ``02_listFields`` — token + field-catalogue query (sync action).
-* ``03_feedback_incremental`` — token + a self-terminating two-page keyset feedback
-  extract (the final page is short, so pagination stops within the recorded pages).
+case replays with no live network access. The matrix spans sync actions (01-02),
+HTTP-free config-validation failures (03-07), the live-recorded data behaviours
+(08-14: epoch/datetime watermarks, incremental resume, full load, empty result,
+multi-value field, business filters, multi-page pagination) and the auth/4xx failure
+cases (15-16). See ``tests/README.md`` for the full case list.
 
 When no cassettes are present the module skips cleanly.
 """
@@ -41,3 +40,26 @@ def test_functional(test_name):
         selected_tests=[test_name],
     )
     tester.run()
+
+
+def test_incremental_resume_advances_watermark_from_seed():
+    """The seeded-resume case must resume from its stored watermark and advance past it.
+
+    The generic replay above enforces this via log comparison (the recorded logs.json is
+    reproduced exactly on replay). This makes the intent explicit and unmissable: the
+    committed cassette's logs must show the resume from the seed AND a persisted watermark
+    that sorts strictly after it.
+    """
+    import json
+
+    logs_path = Path(FUNCTIONAL_DIR) / "09_incremental_resume" / "source" / "data" / "cassettes" / "logs.json"
+    entries = json.loads(logs_path.read_text()).get("logs", [])
+    messages = [e.get("message", "") if isinstance(e, dict) else str(e) for e in entries]
+    blob = "\n".join(messages)
+
+    seed = "2026-06-25"
+    assert f"Resuming from stored watermark (finish={seed})." in blob, blob
+    persisted = [m for m in messages if m.startswith("Persisted watermark (finish=")]
+    assert persisted, "no persisted-watermark log line found"
+    advanced = persisted[-1].split("finish=", 1)[1].rstrip(").")
+    assert advanced > seed, f"watermark {advanced!r} did not advance past seed {seed!r}"

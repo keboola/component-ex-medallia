@@ -1,0 +1,12 @@
+{
+  "exit_code": 1,
+  "stderr": "Invalid configuration: field '#client_secret' \u2014 Field required (missing)\nTraceback (most recent call last):\n  File \"src/component.py\", line 455, in <module>\n    comp.execute_action()\n    ~~~~~~~~~~~~~~~~~~~^^\n  File \"/Users/matyasjirat/VSCodeProjects/Keboola/component-ex-medallia/.venv/lib/python3.14/site-packages/keboola/component/base.py\", line 251, in execute_action\n    return self._do_execute_action()\n           ~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"/Users/matyasjirat/VSCodeProjects/Keboola/component-ex-medallia/.venv/lib/python3.14/site-packages/keboola/component/base.py\", line 265, in _do_execute_action\n    return action_method()\n  File \"src/component.py\", line 234, in run\n    config = self._get_config()\n  File \"src/component.py\", line 262, in _get_config\n    return Configuration(**self.configuration.parameters)\n  File \"/Users/matyasjirat/VSCodeProjects/Keboola/component-ex-medallia/src/configuration.py\", line 109, in __init__\n    raise UserException(_format_validation_error(e)) from None\nkeboola.component.exceptions.UserException: Invalid configuration: field '#client_secret' \u2014 Field required (missing)\n",
+  "logs": [
+    {
+      "level": "ERROR",
+      "logger": "root",
+      "message": "Invalid configuration: field '#client_secret' \u2014 Field required (missing)\nTraceback (most recent call last):\n  File \"src/component.py\", line 455, in <module>\n    comp.execute_action()\n    ~~~~~~~~~~~~~~~~~~~^^\n  File \"/Users/matyasjirat/VSCodeProjects/Keboola/component-ex-medallia/.venv/lib/python3.14/site-packages/keboola/component/base.py\", line 251, in execute_action\n    return self._do_execute_action()\n           ~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"/Users/matyasjirat/VSCodeProjects/Keboola/component-ex-medallia/.venv/lib/python3.14/site-packages/keboola/component/base.py\", line 265, in _do_execute_action\n    return action_method()\n  File \"src/component.py\", line 234, in run\n    config = self._get_config()\n  File \"src/component.py\", line 262, in _get_config\n    return Configuration(**self.configuration.parameters)\n  File \"/Users/matyasjirat/VSCodeProjects/Keboola/component-ex-medallia/src/configuration.py\", line 109, in __init__\n    raise UserException(_format_validation_error(e)) from None\nkeboola.component.exceptions.UserException: Invalid configuration: field '#client_secret' \u2014 Field required (missing)",
+      "timestamp": "2026-07-16T15:19:28.000Z"
+    }
+  ]
+}

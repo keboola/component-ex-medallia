@@ -16,13 +16,16 @@ venv
 # vcr datadirtesting
 # Live credentials — NEVER commit.
 secrets.json
+# Deliberately-wrong credential variants used only to record the 401 / 4xx failure
+# cassettes (real host/client, bad secret or bad tenant). Never commit.
+secrets.*.json
+# Per-test inline secrets written by the scaffolder during recording.
+tests/functional/*/source/data/config.secrets.json
 # The sanitized VCR cassettes ARE committed: every recorded value is deterministic
 # synthetic data (see MedalliaResponseBodySanitizer in src/component.py), so the
 # functional tree is safe and serves as the committable replay regression suite.
 # Only the per-run OUTPUT dir is excluded — it is regenerated on every replay.
 tests/functional/*/source/data/out/
-# Stray datadir test output (datadir tests run in a tempdir, but guard anyway).
-tests/data/*/out/
 
 # component-factory lifecycle tracker (local only, never committed)
 docs/superpowers/*-lifecycle.md
