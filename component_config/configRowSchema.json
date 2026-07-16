@@ -1,130 +1,168 @@
 {
   "type": "object",
-  "title": "Feedback Extraction",
-  "required": [
-    "fields",
-    "survey_id_field_id"
-  ],
+  "title": "Medallia Object Extraction",
   "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "Choose a guided object or write a raw GraphQL query.",
+      "enum": ["structured", "raw"],
+      "options": {
+        "enum_titles": ["Guided (pick an object)", "Raw GraphQL query"],
+        "tooltip": "Guided mode extracts one Medallia connection with a picked field set and optional incremental load. Raw mode runs a GraphQL query you author (always a full load)."
+      },
+      "default": "structured",
+      "propertyOrder": 10
+    },
     "data_object": {
       "type": "string",
       "title": "Data Object",
-      "description": "Medallia data source to extract. v1 supports Feedback.",
-      "enum": [
-        "feedback"
-      ],
+      "description": "Medallia connection to extract into one table.",
+      "format": "select",
+      "enum": [],
       "options": {
-        "enum_titles": [
-          "Feedback"
-        ]
+        "tags": true,
+        "async": {
+          "label": "Load Objects",
+          "action": "listObjects",
+          "autoload": true,
+          "cache": true
+        },
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "Auto-populated from the instance schema. If introspection is disabled you can type an object name manually (e.g. feedback, customers, programs)."
       },
-      "default": "feedback",
-      "propertyOrder": 10
+      "propertyOrder": 20
     },
     "fields": {
       "type": "array",
       "title": "Fields",
-      "description": "Field IDs to extract, one output column each.",
+      "description": "Fields to extract; leave empty to take all scalar fields.",
       "format": "select",
       "uniqueItems": true,
       "items": {
-        "type": "string"
+        "type": "string",
+        "enum": []
       },
-      "propertyOrder": 20,
       "options": {
         "async": {
           "label": "Load Fields",
           "action": "listFields",
-          "autoload": true,
+          "autoload": ["data_object"],
           "cache": true
         },
-        "tooltip": "Medallia field IDs (e.g. `e_nps`, `a_survey_channel`). Use Load Fields to pick from the instance metadata, or type IDs manually. Each field's values become one output column."
-      }
-    },
-    "survey_id_field_id": {
-      "type": "string",
-      "title": "Survey ID Field",
-      "description": "Field ID that identifies the survey; used as the table primary key.",
-      "format": "select",
-      "enum": [],
-      "options": {
-        "async": {
-          "label": "Load Fields",
-          "action": "listFields",
-          "autoload": true,
-          "cache": true
+        "dependencies": {
+          "mode": "structured"
         },
-        "tooltip": "The field ID holding the unique survey identifier. Written to the `surveyId` output column and set as the primary key for incremental upserts."
+        "tooltip": "Shows field names for the chosen object; each becomes one output column. The list reloads when the object changes. Empty selects all scalar fields (for objects without a field catalogue)."
       },
       "propertyOrder": 30
     },
-    "finish_date_field_id": {
+    "raw_query": {
       "type": "string",
-      "title": "Finish Date Field",
-      "description": "Field ID used as the incremental watermark (ordering + cursor).",
-      "default": "k_initialfinishdate_epoch_int",
-      "propertyOrder": 40,
+      "title": "Raw GraphQL Query",
+      "description": "A GraphQL query returning exactly one paginated connection.",
+      "format": "editor",
       "options": {
-        "tooltip": "The finish-date field driving both ordering and the incremental cursor. Default `k_initialfinishdate_epoch_int` is the Unix-epoch-seconds K-field; for a DATETIME field use its field ID and set Finish Date Field Type to Datetime. Entered manually because computed K-fields may not appear in the field metadata list."
-      }
-    },
-    "finish_date_field_type": {
-      "type": "string",
-      "title": "Finish Date Field Type",
-      "description": "Value format of the finish date field.",
-      "enum": [
-        "epoch",
-        "datetime"
-      ],
-      "options": {
-        "enum_titles": [
-          "Epoch seconds (integer)",
-          "Datetime (ISO 8601 string)"
-        ]
+        "editor": {
+          "mode": "text/plain"
+        },
+        "dependencies": {
+          "mode": "raw"
+        },
+        "tooltip": "Must declare $first: Int and $after: String, pass them to exactly one top-level connection, and select nodes { … } and pageInfo { hasNextPage endCursor }. The component injects first/after and pages via pageInfo. Raw mode is always a full load; embed your own date filter for incremental extraction."
       },
-      "default": "epoch",
-      "propertyOrder": 45
+      "propertyOrder": 40
+    },
+    "output_table": {
+      "type": "string",
+      "title": "Output Table",
+      "description": "Name of the output table (raw mode).",
+      "options": {
+        "dependencies": {
+          "mode": "raw"
+        },
+        "tooltip": "Written as <output_table>.csv. Required in raw mode because there is no object name to derive it from."
+      },
+      "propertyOrder": 50
+    },
+    "validate_query": {
+      "type": "button",
+      "format": "sync-action",
+      "options": {
+        "async": {
+          "label": "Validate Query",
+          "action": "validateQuery"
+        },
+        "dependencies": {
+          "mode": "raw"
+        }
+      },
+      "propertyOrder": 60
     },
     "load_type": {
       "type": "string",
       "title": "Load Type",
-      "description": "Incremental keeps a watermark and fetches only new records.",
-      "enum": [
-        "incremental_load",
-        "full_load"
-      ],
+      "description": "Incremental keeps a watermark and fetches only newer records.",
+      "enum": ["incremental_load", "full_load"],
       "options": {
-        "enum_titles": [
-          "Incremental Load",
-          "Full Load"
-        ]
+        "enum_titles": ["Incremental Load", "Full Load"],
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "Incremental load requires an incremental field and an object that supports filtering; otherwise the component logs a warning and loads the full object."
       },
       "default": "incremental_load",
-      "propertyOrder": 50
+      "propertyOrder": 70
     },
-    "initial_start_epoch": {
-      "type": "integer",
-      "title": "Initial Start (Epoch Seconds)",
-      "description": "First-run lower bound (finish-date epoch seconds) when no state exists.",
-      "propertyOrder": 60,
-      "options": {
-        "dependencies": {
-          "finish_date_field_type": "epoch"
-        },
-        "tooltip": "Unix epoch seconds. On the first run (empty state) only records with a finish date after this value are fetched. Leave empty to load full history."
-      }
-    },
-    "initial_start_value": {
+    "incremental_field": {
       "type": "string",
-      "title": "Initial Start (Datetime)",
-      "description": "First-run lower bound as an ISO date/datetime string when no state exists.",
-      "propertyOrder": 65,
+      "title": "Incremental Field",
+      "description": "Date field driving the incremental watermark.",
+      "format": "select",
+      "enum": [],
+      "options": {
+        "async": {
+          "label": "Load Date Fields",
+          "action": "listDateFields",
+          "autoload": ["data_object"],
+          "cache": true
+        },
+        "dependencies": {
+          "load_type": "incremental_load"
+        },
+        "tooltip": "Date/datetime field (or a sortable numeric timestamp) whose value is tracked as the watermark. The value format is auto-detected — no need to declare it."
+      },
+      "propertyOrder": 80
+    },
+    "initial_start": {
+      "type": "string",
+      "title": "Initial Start",
+      "description": "First-run lower bound; empty loads full history.",
       "options": {
         "dependencies": {
-          "finish_date_field_type": "datetime"
+          "load_type": "incremental_load"
         },
-        "tooltip": "ISO 8601 date (e.g. `2026-01-01`). On the first run (empty state) only records with a finish date after this value are fetched. Leave empty to load full history."
-      }
+        "tooltip": "Applied only on the first run (empty state). Use an ISO date (e.g. 2026-01-01) for a date field, or epoch seconds for a numeric timestamp field. Leave empty to load full history first."
+      },
+      "propertyOrder": 90
+    },
+    "filters": {
+      "type": "string",
+      "title": "Filters",
+      "description": "Optional Medallia filter tree as JSON.",
+      "format": "editor",
+      "options": {
+        "editor": {
+          "mode": "application/json"
+        },
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "A raw Medallia filter object (and/or/not, fieldIds with in/gt/gte/lt/lte/isNull/eq) as JSON. AND-joined with the incremental watermark filter. Leave empty for no extra filtering."
+      },
+      "propertyOrder": 100
     },
     "page_size": {
       "type": "integer",
@@ -133,20 +171,10 @@
       "default": 100,
       "minimum": 1,
       "maximum": 1000,
-      "propertyOrder": 70,
       "options": {
-        "tooltip": "The `first` argument sent on every query. Defaults to 100; values above the Medallia maximum of 1000 are clamped."
-      }
-    },
-    "filters": {
-      "type": "object",
-      "title": "Business Filters (Advanced)",
-      "description": "Optional Medallia filter tree merged into the query.",
-      "additionalProperties": true,
-      "propertyOrder": 80,
-      "options": {
-        "tooltip": "Advanced: a raw Medallia filter object (`and`/`or`/`not`, `in`, `gt`/`gte`/`lt`/`lte`, `isNull`) with `fieldIds`. Merged with the incremental watermark filter. Leave empty for no extra filtering."
-      }
+        "tooltip": "The first argument sent on every query. Defaults to 100; values above the Medallia maximum of 1000 are clamped."
+      },
+      "propertyOrder": 110
     }
   }
 }

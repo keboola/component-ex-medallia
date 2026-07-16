@@ -1,21 +1,39 @@
-"""Separated Medallia Query API (GraphQL) client package."""
+"""Separated generic Medallia Query API (GraphQL) client package."""
 
 from client.medallia_client import (
+    METADATA_CATALOG_DENYLIST,
+    SHAPE_DATA,
+    SHAPE_FIELDDATA,
+    SHAPE_SCALAR,
+    STATIC_EXTRACTABLE_OBJECTS,
+    STATIC_OBJECT_SHAPES,
+    GenericQueryBuilder,
     MedalliaClient,
     MedalliaClientError,
-    MedalliaQueryBuilder,
     MedalliaTokenManager,
-    Watermark,
+    ObjectShape,
+    advance_watermark,
     flatten_node,
-    watermark_from_node,
+    list_extractable_objects,
+    resolve_object_shape,
+    row_hash,
 )
 
 __all__ = [
+    "METADATA_CATALOG_DENYLIST",
+    "SHAPE_DATA",
+    "SHAPE_FIELDDATA",
+    "SHAPE_SCALAR",
+    "STATIC_EXTRACTABLE_OBJECTS",
+    "STATIC_OBJECT_SHAPES",
+    "GenericQueryBuilder",
     "MedalliaClient",
     "MedalliaClientError",
-    "MedalliaQueryBuilder",
     "MedalliaTokenManager",
-    "Watermark",
+    "ObjectShape",
+    "advance_watermark",
     "flatten_node",
-    "watermark_from_node",
+    "list_extractable_objects",
+    "resolve_object_shape",
+    "row_hash",
 ]

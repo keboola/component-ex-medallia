@@ -1,11 +1,19 @@
-"""Typed Pydantic configuration models for the Medallia Query API extractor.
+"""Typed Pydantic configuration models for the generic Medallia Query API extractor.
 
 The component always receives a single platform-merged ``config.json``. Root-level
-connection/auth parameters and row-level object parameters therefore arrive in the
-same ``parameters`` dict, so both models parse from that merged dict and ignore the
-keys that belong to the other model (``extra="ignore"``).
+connection/auth parameters and row-level object parameters therefore arrive in the same
+``parameters`` dict, so both models parse from that merged dict and ignore the keys that
+belong to the other model (``extra="ignore"``).
+
+Redesign (spec §5.2): the row is generic over every paginated Medallia connection. It has
+two modes — ``structured`` (pick an object, its fields, incremental settings and filters)
+and ``raw`` (a user-authored GraphQL query). Every field fed by an async sync action has a
+safe empty default and NO empty-rejecting validator, because the sync-action machinery
+instantiates the config on a half-filled form; presence is validated inside ``run()`` / the
+action method, not on the model.
 """
 
+import json
 import logging
 import re
 from enum import StrEnum
@@ -13,9 +21,10 @@ from enum import StrEnum
 from keboola.component.exceptions import UserException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_field, field_validator
 
-# GraphQL name pattern — Medallia field IDs are used both as ``fieldData`` arguments and
-# as query aliases, so they must be valid GraphQL names. Validating here prevents any
-# possibility of query injection through a crafted field ID.
+# GraphQL name pattern — Medallia field IDs and object names are interpolated into the query
+# string (as ``fieldData``/``data`` arguments, aliases and the connection field name), so they
+# must be valid GraphQL names. Validating here prevents any query injection through a crafted
+# field ID / object name.
 _GRAPHQL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Medallia API hard ceiling for the ``first`` page-size argument (reference repo:
@@ -27,27 +36,12 @@ MAX_PAGE_SIZE = 1000
 # keeping the request count low. Still clamped to ``MAX_PAGE_SIZE``.
 DEFAULT_PAGE_SIZE = 100
 
-DEFAULT_FINISH_DATE_FIELD_ID = "k_initialfinishdate_epoch_int"
 
+class Mode(StrEnum):
+    """Row extraction mode (spec §5.2)."""
 
-class DataObject(StrEnum):
-    """Supported Medallia data-source root node. v1 ships ``feedback`` only."""
-
-    feedback = "feedback"
-
-
-class FinishDateFieldType(StrEnum):
-    """Value format of the finish-date watermark field.
-
-    ``epoch``    — integer epoch-seconds (e.g. ``k_initialfinishdate_epoch_int``); the
-                   default, so existing configs keep their behaviour.
-    ``datetime`` — an ISO 8601 date / datetime string (e.g. ``e_creationdate``,
-                   ``e_responsedate`` with values like ``2026-05-01``). ISO 8601 sorts
-                   correctly lexicographically, so the keyset watermark still advances.
-    """
-
-    epoch = "epoch"
-    datetime = "datetime"
+    structured = "structured"
+    raw = "raw"
 
 
 class LoadType(StrEnum):
@@ -58,7 +52,7 @@ class LoadType(StrEnum):
 def _validate_graphql_name(value: str, field_name: str) -> str:
     if not _GRAPHQL_NAME.match(value):
         raise UserException(
-            f"{field_name} '{value}' is not a valid Medallia field ID (must match {_GRAPHQL_NAME.pattern})."
+            f"{field_name} '{value}' is not a valid Medallia identifier (must match {_GRAPHQL_NAME.pattern})."
         )
     return value
 
@@ -66,12 +60,12 @@ def _validate_graphql_name(value: str, field_name: str) -> str:
 def _validate_filter_keys(node: object) -> None:
     """Assert every object key in a user ``filters`` tree is a valid GraphQL name.
 
-    ``client._to_graphql`` emits object keys UNQUOTED as GraphQL names, so an invalid key in
-    the user-provided ``filters`` object could corrupt or break out of the generated query
-    (a query-injection vector). Every legitimate Medallia filter operator — ``and``/``or``/
+    The query builder emits object keys UNQUOTED as GraphQL names, so an invalid key in the
+    user-provided ``filters`` object could corrupt or break out of the generated query (a
+    query-injection vector). Every legitimate Medallia filter operator — ``and``/``or``/
     ``not``/``fieldIds``/``in``/``gt``/``gte``/``lt``/``lte``/``isNull``/``eq`` — is a valid
     GraphQL name, so this rejects only malformed/crafted keys. Scalar VALUES need no check:
-    ``_to_graphql`` JSON-escapes and quotes them, so they cannot break out of the query.
+    the builder JSON-escapes and quotes them, so they cannot break out of the query.
     """
     if isinstance(node, dict):
         for key, val in node.items():
@@ -87,7 +81,7 @@ def _validate_filter_keys(node: object) -> None:
 
 
 class Configuration(BaseModel):
-    """Root (config-level) connection and authentication parameters."""
+    """Root (config-level) connection and authentication parameters (unchanged from v1)."""
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -103,63 +97,55 @@ class Configuration(BaseModel):
         except ValidationError as e:
             # ``from None`` (never ``from e``): a Pydantic ValidationError carries
             # ``input_value`` — the full merged config, including the decrypted
-            # ``#client_secret`` and tenant host. Chaining it would surface that value in
-            # the traceback that ``logging.exception`` prints to the customer-visible job
-            # log. Suppress the chain and raise a value-free message instead.
+            # ``#client_secret`` and tenant host. Chaining it would surface that value in the
+            # traceback that ``logging.exception`` prints to the customer-visible job log.
+            # Suppress the chain and raise a value-free message instead.
             raise UserException(_format_validation_error(e)) from None
 
 
 class RowConfiguration(BaseModel):
-    """Row-level parameters — one config row per Medallia data object / output table."""
+    """Row-level parameters — one config row per Medallia object / raw query / output table."""
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    data_object: DataObject = DataObject.feedback
-    fields: list[str] = Field(..., min_length=1, description="Field IDs to extract via fieldData(fieldId).")
-    finish_date_field_id: str = DEFAULT_FINISH_DATE_FIELD_ID
-    finish_date_field_type: FinishDateFieldType = Field(
-        default=FinishDateFieldType.epoch,
-        description="Value format of finish_date_field_id: 'epoch' (integer seconds) or 'datetime' (ISO string).",
-    )
-    survey_id_field_id: str = Field(..., description="Field ID used as the survey identifier / primary key.")
-    filters: dict | None = Field(default=None, description="Optional Medallia business filter tree.")
-    page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1)
-    initial_start_epoch: int | None = Field(
-        default=None, description="First-run lower bound (finish-date epoch seconds) for an epoch watermark field."
-    )
-    initial_start_value: str | None = Field(
-        default=None,
-        description="First-run lower bound as an ISO date/datetime string for a 'datetime' watermark field.",
-    )
+    mode: Mode = Mode.structured
+    # Structured mode.
+    data_object: str = Field(default="", description="Medallia connection to extract (structured mode).")
+    fields: list[str] = Field(default_factory=list, description="Field IDs to extract; empty ⇒ all scalar fields.")
     load_type: LoadType = LoadType.incremental_load
+    incremental_field: str = Field(default="", description="Date/int field ID driving the incremental watermark.")
+    initial_start: str = Field(default="", description="First-run lower bound (ISO date or epoch seconds).")
+    filters: str = Field(default="", description="Optional Medallia filter tree as a JSON string.")
+    # Raw mode.
+    raw_query: str = Field(default="", description="Raw GraphQL query (raw mode).")
+    output_table: str = Field(default="", description="Output table name (raw mode).")
+    # Both modes.
+    page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1)
 
     def __init__(self, **data):
         try:
             super().__init__(**data)
         except ValidationError as e:
-            # See Configuration.__init__: ``from None`` keeps the decrypted secret /
-            # config in the chained ValidationError's ``input_value`` out of the log.
+            # See Configuration.__init__: ``from None`` keeps the decrypted secret / config in
+            # the chained ValidationError's ``input_value`` out of the log.
             raise UserException(_format_validation_error(e)) from None
+
+    @field_validator("data_object")
+    @classmethod
+    def _validate_object_name(cls, value: str) -> str:
+        # Empty is allowed (async-fed / half-filled form); validate only a supplied value.
+        return _validate_graphql_name(value, "data_object") if value else value
+
+    @field_validator("incremental_field")
+    @classmethod
+    def _validate_incremental_field(cls, value: str) -> str:
+        return _validate_graphql_name(value, "incremental_field") if value else value
 
     @field_validator("fields")
     @classmethod
     def _validate_field_ids(cls, value: list[str]) -> list[str]:
         for field_id in value:
             _validate_graphql_name(field_id, "fields entry")
-        return value
-
-    @field_validator("finish_date_field_id", "survey_id_field_id")
-    @classmethod
-    def _validate_watermark_field(cls, value: str) -> str:
-        return _validate_graphql_name(value, "watermark field ID")
-
-    @field_validator("filters")
-    @classmethod
-    def _validate_filters(cls, value: dict | None) -> dict | None:
-        # Guard the unquoted GraphQL keys the filter tree contributes to the query (see
-        # _validate_filter_keys) — the same injection concern the field-ID validators cover.
-        if value is not None:
-            _validate_filter_keys(value)
         return value
 
     @field_validator("page_size")
@@ -173,38 +159,36 @@ class RowConfiguration(BaseModel):
     @computed_field
     @property
     def incremental(self) -> bool:
+        """Whether the row REQUESTS incremental load (runtime capability is checked separately)."""
         return self.load_type == LoadType.incremental_load
 
-    @property
-    def output_columns(self) -> list[str]:
-        """Output column set: node id + surveyId + watermark finish field + configured fields (deduped).
+    def parsed_filters(self) -> dict | None:
+        """Parse and validate the ``filters`` JSON string; empty ⇒ no filter.
 
-        ``id`` is the node's direct scalar identifier (selected alongside the survey field) and
-        gives every record a stable identity independent of the configured survey field.
+        Raised as a ``UserException`` (exit 1) for malformed JSON or a non-object root or an
+        injecting object key — all user-fixable. Called from ``run()``, not model init, so a
+        half-filled sync-action form with partial JSON does not crash the action.
         """
-        columns = ["id", "surveyId", self.finish_date_field_id]
-        reserved = {self.survey_id_field_id, self.finish_date_field_id, "id", "surveyId"}
-        for field_id in self.fields:
-            if field_id not in reserved and field_id not in columns:
-                columns.append(field_id)
-        return columns
-
-    @property
-    def initial_start(self) -> int | str | None:
-        """First-run lower-bound value matching the configured watermark field format."""
-        if self.finish_date_field_type == FinishDateFieldType.datetime:
-            return self.initial_start_value
-        return self.initial_start_epoch
+        if not self.filters.strip():
+            return None
+        try:
+            parsed = json.loads(self.filters)
+        except (ValueError, TypeError) as exc:  # fmt: skip
+            raise UserException(f"filters is not valid JSON: {exc}") from None
+        if not isinstance(parsed, dict):
+            raise UserException('filters must be a JSON object (a Medallia filter tree), e.g. {"fieldIds": [...]}.')
+        _validate_filter_keys(parsed)
+        return parsed
 
 
 def _format_validation_error(error: ValidationError) -> str:
     """Build a user-actionable message from a ValidationError WITHOUT echoing any value.
 
     Only the field location, the human-readable message and the error type are used.
-    ``include_input=False`` / ``include_url=False`` guarantee the per-error dicts never
-    carry ``input`` (the offending value — which for this config is the decrypted
-    ``#client_secret`` and tenant details), so a value can never leak into the message
-    even if this function is edited later.
+    ``include_input=False`` / ``include_url=False`` guarantee the per-error dicts never carry
+    ``input`` (the offending value — which for this config is the decrypted ``#client_secret``
+    and tenant details), so a value can never leak into the message even if this function is
+    edited later.
     """
     messages = []
     for err in error.errors(include_input=False, include_url=False):
