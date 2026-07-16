@@ -63,6 +63,29 @@ def _validate_graphql_name(value: str, field_name: str) -> str:
     return value
 
 
+def _validate_filter_keys(node: object) -> None:
+    """Assert every object key in a user ``filters`` tree is a valid GraphQL name.
+
+    ``client._to_graphql`` emits object keys UNQUOTED as GraphQL names, so an invalid key in
+    the user-provided ``filters`` object could corrupt or break out of the generated query
+    (a query-injection vector). Every legitimate Medallia filter operator — ``and``/``or``/
+    ``not``/``fieldIds``/``in``/``gt``/``gte``/``lt``/``lte``/``isNull``/``eq`` — is a valid
+    GraphQL name, so this rejects only malformed/crafted keys. Scalar VALUES need no check:
+    ``_to_graphql`` JSON-escapes and quotes them, so they cannot break out of the query.
+    """
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if not _GRAPHQL_NAME.match(str(key)):
+                raise UserException(
+                    f"filters contains an invalid key '{key}'; filter object keys must be GraphQL "
+                    f"names matching {_GRAPHQL_NAME.pattern} (e.g. and, or, fieldIds, gt, lt)."
+                )
+            _validate_filter_keys(val)
+    elif isinstance(node, list):
+        for item in node:
+            _validate_filter_keys(item)
+
+
 class Configuration(BaseModel):
     """Root (config-level) connection and authentication parameters."""
 
@@ -129,6 +152,15 @@ class RowConfiguration(BaseModel):
     @classmethod
     def _validate_watermark_field(cls, value: str) -> str:
         return _validate_graphql_name(value, "watermark field ID")
+
+    @field_validator("filters")
+    @classmethod
+    def _validate_filters(cls, value: dict | None) -> dict | None:
+        # Guard the unquoted GraphQL keys the filter tree contributes to the query (see
+        # _validate_filter_keys) — the same injection concern the field-ID validators cover.
+        if value is not None:
+            _validate_filter_keys(value)
+        return value
 
     @field_validator("page_size")
     @classmethod

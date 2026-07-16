@@ -602,6 +602,24 @@ class TestConfiguration(unittest.TestCase):
         with self.assertRaises(UserException):
             RowConfiguration(**_valid_params(survey_id_field_id="a b"))
 
+    def test_valid_filter_tree_accepted(self):
+        # A legitimate nested Medallia filter (operators + fieldIds) parses cleanly — its keys
+        # are all valid GraphQL names.
+        filters = {"and": [{"fieldIds": ["a_channel"], "eq": "web"}, {"or": [{"isNull": ["e_nps"]}]}]}
+        row = RowConfiguration(**_valid_params(filters=filters))
+        self.assertEqual(row.filters, filters)
+
+    def test_filter_key_injection_guard(self):
+        # An unquoted filter object key is emitted verbatim into the GraphQL query; a crafted
+        # key must be rejected at config validation to close the injection vector.
+        with self.assertRaises(UserException):
+            RowConfiguration(**_valid_params(filters={"and) { evil": [{"fieldIds": ["x"]}]}))
+
+    def test_filter_key_injection_guard_nested(self):
+        # The check is recursive: an invalid key nested inside a list/dict is caught too.
+        with self.assertRaises(UserException):
+            RowConfiguration(**_valid_params(filters={"and": [{"bad key": "v"}]}))
+
     def test_output_columns_dedupe(self):
         row = RowConfiguration(**_valid_params(fields=["a_sid", "k_fin", "e_nps"]))
         # Node ``id`` leads, then surveyId, watermark field, and the non-reserved user fields.
