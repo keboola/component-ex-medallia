@@ -1,9 +1,0 @@
-{
-  "action": "listFields",
-  "parameters": {
-    "instance_host": "example.medallia.com",
-    "api_host": "example.apis.medallia.com",
-    "company_name": "example",
-    "client_id": "DUMMY_CLIENT_ID"
-  }
-}

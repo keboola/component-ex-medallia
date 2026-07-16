@@ -101,21 +101,47 @@ class ObjectShape:
     node_type: str | None = None
     # Bare scalar node fields → their GraphQL scalar type name (Int/Float/Boolean/String/ID).
     scalar_fields: dict[str, str] = field(default_factory=dict)
+    # GraphQL types of the connection's ``first`` / ``after`` arguments, exactly as the schema
+    # declares them (e.g. ``Int!`` and ``ID`` on this instance — NOT the GraphQL defaults). They
+    # are emitted verbatim in the paginated query's variable declaration; declaring a nullable
+    # ``$first: Int`` where the field expects ``Int!`` is a hard VariableTypeMismatch at the
+    # gateway, so the real types must flow through from introspection.
+    first_type: str = "Int"
+    after_type: str = "String"
 
 
 # Conservative offline shapes for the known extractable objects (spec §4 table), used only when
 # live introspection is unavailable. ``supports_filter``/``supports_order`` default False for the
 # operational/scalar objects so they degrade to a safe full load; feedback/invitations keep their
 # incremental capability. ``scalar_fields`` is left empty offline (the node type is not known).
+# ``first``/``after`` are ``Int!``/``ID`` across Medallia's Relay connections (verified live on
+# this instance); the static fallback declares them so an introspection-disabled run still emits
+# a gateway-valid variable declaration.
+_STATIC_FIRST_TYPE = "Int!"
+_STATIC_AFTER_TYPE = "ID"
+
+
+def _static_shape(name: str, shape: str, has_id: bool, supports_filter: bool, supports_order: bool) -> ObjectShape:
+    return ObjectShape(
+        name,
+        shape,
+        has_id,
+        supports_filter,
+        supports_order,
+        first_type=_STATIC_FIRST_TYPE,
+        after_type=_STATIC_AFTER_TYPE,
+    )
+
+
 STATIC_OBJECT_SHAPES: dict[str, ObjectShape] = {
-    "feedback": ObjectShape("feedback", SHAPE_FIELDDATA, True, True, True),
-    "invitations": ObjectShape("invitations", SHAPE_FIELDDATA, True, True, True),
-    "customers": ObjectShape("customers", SHAPE_DATA, True, False, False),
-    "programs": ObjectShape("programs", SHAPE_SCALAR, True, False, False),
-    "missingSocialURLs": ObjectShape("missingSocialURLs", SHAPE_SCALAR, True, False, False),
-    "socialURLs": ObjectShape("socialURLs", SHAPE_SCALAR, False, False, False),
-    "socialUrlsHealth": ObjectShape("socialUrlsHealth", SHAPE_SCALAR, False, False, False),
-    "unitWarnings": ObjectShape("unitWarnings", SHAPE_SCALAR, False, False, False),
+    "feedback": _static_shape("feedback", SHAPE_FIELDDATA, True, True, True),
+    "invitations": _static_shape("invitations", SHAPE_FIELDDATA, True, True, True),
+    "customers": _static_shape("customers", SHAPE_DATA, True, False, False),
+    "programs": _static_shape("programs", SHAPE_SCALAR, True, False, False),
+    "missingSocialURLs": _static_shape("missingSocialURLs", SHAPE_SCALAR, True, False, False),
+    "socialURLs": _static_shape("socialURLs", SHAPE_SCALAR, False, False, False),
+    "socialUrlsHealth": _static_shape("socialUrlsHealth", SHAPE_SCALAR, False, False, False),
+    "unitWarnings": _static_shape("unitWarnings", SHAPE_SCALAR, False, False, False),
 }
 
 
@@ -229,7 +255,7 @@ query MedalliaIntrospect {
     queryType {
       fields {
         name
-        args { name }
+        args { name type { ...TypeRef } }
         type { ...TypeRef }
       }
     }
@@ -238,6 +264,7 @@ query MedalliaIntrospect {
       kind
       fields {
         name
+        args { name }
         type { ...TypeRef }
       }
     }
@@ -261,6 +288,24 @@ def _named_type(type_ref: dict[str, Any] | None) -> dict[str, Any]:
 
 def _named_type_name(type_ref: dict[str, Any] | None) -> str | None:
     return _named_type(type_ref).get("name")
+
+
+def _type_ref_str(type_ref: dict[str, Any] | None) -> str | None:
+    """Render a GraphQL TypeRef as its schema string (e.g. ``Int!``, ``ID``, ``[String!]``).
+
+    Used to declare the paginated query's ``$first`` / ``$after`` variables with the connection's
+    ACTUAL argument types, so the gateway does not reject a nullable variable in a non-null slot.
+    """
+    if not type_ref:
+        return None
+    kind = type_ref.get("kind")
+    if kind == "NON_NULL":
+        inner = _type_ref_str(type_ref.get("ofType"))
+        return f"{inner}!" if inner else None
+    if kind == "LIST":
+        inner = _type_ref_str(type_ref.get("ofType"))
+        return f"[{inner}]" if inner else None
+    return type_ref.get("name")
 
 
 def _index_types(introspection: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -306,7 +351,9 @@ def resolve_object_shape(object_name: str, introspection: dict[str, Any]) -> Obj
     root_field = next((f for f in _query_root_fields(introspection) if f.get("name") == object_name), None)
     if root_field is None:
         return None
-    args = {a.get("name") for a in (root_field.get("args") or [])}
+    arg_list = root_field.get("args") or []
+    args = {a.get("name") for a in arg_list}
+    arg_types = {a.get("name"): _type_ref_str(a.get("type")) for a in arg_list if a.get("name")}
 
     return_type = types.get(_named_type_name(root_field.get("type"))) or {}
     nodes_field = next((f for f in (return_type.get("fields") or []) if f.get("name") == "nodes"), None)
@@ -329,6 +376,11 @@ def resolve_object_shape(object_name: str, introspection: dict[str, Any]) -> Obj
         field_name = node_field.get("name")
         if not field_name or field_name in _RESERVED_NODE_FIELDS:
             continue
+        # Skip accessor fields that REQUIRE arguments (e.g. the Contact node's value(fieldId),
+        # aggregate(definition) …). Their return type is a scalar, but selecting them bare is a
+        # MissingFieldArgument error at the gateway — they are not extractable leaf columns.
+        if node_field.get("args"):
+            continue
         base = _named_type(node_field.get("type"))
         if base.get("kind") in {"SCALAR", "ENUM"}:
             scalar_fields[field_name] = base.get("name") or "String"
@@ -341,6 +393,8 @@ def resolve_object_shape(object_name: str, introspection: dict[str, Any]) -> Obj
         supports_order="orderBy" in args,
         node_type=node_type_name,
         scalar_fields=scalar_fields,
+        first_type=arg_types.get("first") or "Int",
+        after_type=arg_types.get("after") or "String",
     )
 
 
@@ -362,6 +416,21 @@ def _assert_graphql_name(value: str, what: str) -> str:
     return value
 
 
+# A GraphQL type reference — a name plus optional non-null (``!``) / list (``[]``) wrappers.
+_GRAPHQL_TYPE_ALLOWED = _GRAPHQL_NAME_ALLOWED | set("![]")
+
+
+def _assert_graphql_type(value: str, what: str) -> str:
+    """Reject anything that is not a plain GraphQL type reference before it hits the header.
+
+    ``first``/``after`` types come from introspection, but the builder is the last gate before
+    they are written into the variable declaration, so it re-validates (never trust the caller).
+    """
+    if not value or value[0].isdigit() or not set(value) <= _GRAPHQL_TYPE_ALLOWED:
+        raise UserException(f"{what} type '{value}' is not a valid GraphQL type reference.")
+    return value
+
+
 class GenericQueryBuilder:
     """Builds one Relay-connection GraphQL query for any object shape (spec §6.4).
 
@@ -380,6 +449,8 @@ class GenericQueryBuilder:
         supports_filter: bool,
         supports_order: bool,
         has_id: bool = True,
+        first_type: str = "Int",
+        after_type: str = "String",
     ):
         self._object_name = _assert_graphql_name(object_name, "data_object")
         self._node_shape = node_shape
@@ -392,6 +463,10 @@ class GenericQueryBuilder:
         self._supports_filter = supports_filter
         self._supports_order = supports_order
         self._has_id = has_id
+        # GraphQL type of the connection's first/after args (verbatim from introspection). The
+        # names themselves are validated so a crafted type string cannot break out of the header.
+        self._first_type = _assert_graphql_type(first_type, "first")
+        self._after_type = _assert_graphql_type(after_type, "after")
 
     def _selection_entries(self) -> list[tuple[str, str]]:
         """``(output_column, selection_fragment)`` pairs, ``id`` first, de-duplicated by column.
@@ -399,17 +474,29 @@ class GenericQueryBuilder:
         Bare node scalars (``scalar_fields``) are always selected bare; the user-picked
         ``selected_fields`` go through the shape's accessor (``fieldData``/``data``), except in
         the pure scalar shape where everything is a bare field name.
+
+        The ``incremental_field`` is ALWAYS added to the selection (even when the user did not
+        list it in ``fields``): the watermark advances off the field's value in each output row,
+        so it must be fetched — otherwise the cursor never moves and every run re-reads the
+        whole window. It de-dupes against an explicit selection, so it is added at most once.
         """
-        entries: list[tuple[str, str]] = []
-        if self._has_id:
-            entries.append(("id", "id"))
+        selected = list(self._selected_fields)
         if self._node_shape == SHAPE_SCALAR:
-            for name in self._selected_fields or self._scalar_fields:
-                entries.append((name, name))
+            names = list(selected or self._scalar_fields)
+            if self._incremental_field and self._incremental_field not in names:
+                names.append(self._incremental_field)
+            entries: list[tuple[str, str]] = [("id", "id")] if self._has_id else []
+            entries.extend((name, name) for name in names)
         else:
-            for name in self._scalar_fields:
-                entries.append((name, name))
-            for name in self._selected_fields:
+            if (
+                self._incremental_field
+                and self._incremental_field not in selected
+                and (self._incremental_field not in self._scalar_fields)
+            ):
+                selected.append(self._incremental_field)
+            entries = [("id", "id")] if self._has_id else []
+            entries.extend((name, name) for name in self._scalar_fields)
+            for name in selected:
                 if self._node_shape == SHAPE_FIELDDATA:
                     fragment = f"{name}: fieldData(fieldId: {json.dumps(name)}) {{ values }}"
                 else:  # SHAPE_DATA
@@ -463,7 +550,7 @@ class GenericQueryBuilder:
         if self._supports_order and self._incremental_field:
             args.append(f"orderBy: [{{fieldId: {json.dumps(self._incremental_field)}, direction: ASC}}]")
         return (
-            f"query ($first: Int, $after: String) {{ "
+            f"query ($first: {self._first_type}, $after: {self._after_type}) {{ "
             f"{self._object_name}({', '.join(args)}) {{ "
             f"nodes {{ {self._build_selection()} }} "
             f"pageInfo {{ hasNextPage endCursor }} }} }}"

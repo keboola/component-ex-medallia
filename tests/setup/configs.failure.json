@@ -1,7 +1,7 @@
 [
   {
     "name": "03_run_missing_instance_host",
-    "description": "run with required root field instance_host missing -> exit 1 (no HTTP).",
+    "description": "structured run with required root field instance_host missing -> exit 1 (no HTTP).",
     "config": {
       "action": "run",
       "parameters": {
@@ -9,20 +9,20 @@
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
         "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
         "data_object": "feedback",
         "fields": [
           "a_customerid"
         ],
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "load_type": "incremental_load"
+        "load_type": "incremental_load",
+        "incremental_field": "a_initial_finish_timestamp",
+        "page_size": 5
       }
     }
   },
   {
     "name": "04_run_missing_client_secret",
-    "description": "run with #client_secret (credentials) missing -> exit 1 (no HTTP).",
+    "description": "structured run with #client_secret (credentials) missing -> exit 1 (no HTTP).",
     "config": {
       "action": "run",
       "parameters": {
@@ -30,14 +30,14 @@
         "api_host": "example.apis.medallia.com",
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
+        "mode": "structured",
         "data_object": "feedback",
         "fields": [
           "a_customerid"
         ],
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "load_type": "incremental_load"
+        "load_type": "incremental_load",
+        "incremental_field": "a_initial_finish_timestamp",
+        "page_size": 5
       }
     }
   },
@@ -55,10 +55,10 @@
     }
   },
   {
-    "name": "06_listFields_missing_creds",
-    "description": "listFields with credentials missing -> clean exit 1 (not exit 2).",
+    "name": "06_listObjects_missing_creds",
+    "description": "listObjects with credentials missing -> clean exit 1 (not exit 2).",
     "config": {
-      "action": "listFields",
+      "action": "listObjects",
       "parameters": {
         "instance_host": "example.medallia.com",
         "api_host": "example.apis.medallia.com",
@@ -77,12 +77,31 @@
         "api_host": "example.apis.medallia.com",
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
+        "mode": "structured",
         "data_object": "feedback",
         "fields": [
           "a_customerid"
         ],
-        "survey_id_field_id": "a_surveyid",
-        "load_type": "incremental_load"
+        "load_type": "incremental_load",
+        "page_size": 5
+      }
+    }
+  },
+  {
+    "name": "08_run_bad_raw_query",
+    "description": "raw mode with a query missing $first/$after/pageInfo -> static contract check -> exit 1 (no HTTP).",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "raw",
+        "raw_query": "query { feedback { nodes { id } } }",
+        "output_table": "raw_feedback",
+        "page_size": 5
       }
     }
   }

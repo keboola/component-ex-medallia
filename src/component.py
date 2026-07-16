@@ -54,9 +54,11 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # VCR sanitizers — picked up automatically by the keboola.datadirtest scaffolder while
 # RECORDING cassettes. keboola.vcr ships only inside keboola.datadirtest (a dev-only
 # dependency), so it is absent from the production image (`uv sync --no-dev`); the guard keeps
-# the production import clean. NOTE (Phase 5.3): the response-body sanitizer below still targets
-# the v1 fieldData shape and is EXTENDED for the generic shapes (data(fieldId){value,values},
-# bare scalars, pageInfo.endCursor, id-less nodes) in the dedicated recording phase.
+# the production import clean. The response-body sanitizer overwrites EVERY node value across
+# all three generic node shapes (spec §4): (a) fieldData(fieldId){values}, (b) data(fieldId)
+# {value,values} (customers), and (c) bare scalar node fields (programs/social/unitWarnings) —
+# including id-less nodes — plus pageInfo.endCursor and the request `after` cursor, so a
+# recorded cassette is clean BY CONSTRUCTION and verifiable by allowlist.
 try:
     from keboola.vcr import BaseSanitizer, DefaultSanitizer, UrlPatternSanitizer
 
@@ -64,21 +66,95 @@ try:
         """Overwrite Query API response payloads with deterministic synthetic data.
 
         Free-text verbatim fields can contain arbitrary customer PII, so a denylist is unsafe:
-        this REPLACES every value rather than redacting known-bad ones, making a recorded
-        cassette clean BY CONSTRUCTION and verifiable by allowlist.
+        this REPLACES every value across every node shape (fieldData / data / bare scalar),
+        every node id, the ``pageInfo.endCursor`` and the request ``after`` cursor, so nothing
+        real survives into a cassette. Values keep their ARITY and SHAPE (a multi-value field
+        stays multi-value; an epoch-int field stays a long integer; a date/datetime field stays
+        date-shaped) so type inference, watermark advance and pagination still behave on replay.
         """
 
         SYNTHETIC_COMMENT = "Synthetic feedback comment."
+        # Cursors may encode offsets/PII (spec risk #7). The request body is NOT part of the VCR
+        # match key (match_on = method/scheme/host/port/path/query), so a normalised cursor never
+        # breaks replay ordering — it only keeps real cursor strings out of the committed cassette.
+        SYNTHETIC_CURSOR = "SYNTHETIC-CURSOR"
+        # A fixed synthetic field catalogue. Field IDs are schema identifiers (not PII) and are
+        # deliberately the ones the recorded cases select/order by, so replay types columns and
+        # detects the INT watermark exactly as the live schema would (an INT finish field →
+        # numeric watermark + integer column; a DATE/DATETIME field → date/timestamp column; a
+        # multivalued field → JSON-encoded string column).
         _SYNTHETIC_FIELD_CATALOG = [
-            {"id": "a_surveyid", "name": "Survey ID", "dataType": "STRING"},
-            {"id": "e_creationdate", "name": "Creation Date", "dataType": "DATE"},
-            {"id": "e_nps", "name": "NPS Score", "dataType": "INTEGER"},
-            {"id": "e_comment", "name": "Comment", "dataType": "STRING"},
-            {"id": "a_survey_channel", "name": "Survey Channel", "dataType": "STRING"},
+            {"id": "a_surveyid", "name": "Survey ID", "dataType": "STRING", "sortable": True, "multivalued": False},
+            {"id": "a_customerid", "name": "Customer ID", "dataType": "STRING", "sortable": True, "multivalued": False},
+            {
+                "id": "e_creationdate",
+                "name": "Creation Date",
+                "dataType": "DATE",
+                "sortable": True,
+                "multivalued": False,
+            },
+            {
+                "id": "e_accepteddate",
+                "name": "Accepted Date",
+                "dataType": "DATETIME",
+                "sortable": True,
+                "multivalued": False,
+            },
+            {
+                "id": "a_initial_finish_timestamp",
+                "name": "Initial Finish Timestamp",
+                "dataType": "INT",
+                "sortable": True,
+                "multivalued": False,
+            },
+            {
+                "id": "a_recognition_sentiment_types",
+                "name": "Recognition Sentiment Types",
+                "dataType": "STRING",
+                "sortable": False,
+                "multivalued": True,
+            },
+            {"id": "e_nps", "name": "NPS Score", "dataType": "INTEGER", "sortable": True, "multivalued": False},
+            {"id": "e_comment", "name": "Comment", "dataType": "STRING", "sortable": False, "multivalued": False},
+            {
+                "id": "a_survey_channel",
+                "name": "Survey Channel",
+                "dataType": "STRING",
+                "sortable": False,
+                "multivalued": False,
+            },
         ]
+        # An all-digit value at least this long is treated as an epoch timestamp (10-digit
+        # seconds since 1970), so the synthetic replacement stays a long integer too.
+        _EPOCH_INT_THRESHOLD = 10**8
 
         def __init__(self) -> None:
             self._node_counter = 0
+            self._cursor_counter = 0
+
+        # -- request: scrub the paging cursor out of the stored body ----------------------
+
+        def before_record_request(self, request):
+            """Normalise the ``after`` paging cursor in the request body (not a match key)."""
+            body = getattr(request, "body", None)
+            if body is None:
+                return request
+            is_bytes = isinstance(body, bytes)
+            text = body.decode("utf-8", "ignore") if is_bytes else body
+            if not isinstance(text, str) or '"after"' not in text:
+                return request
+            try:
+                payload = json.loads(text)
+            except (ValueError, TypeError):  # fmt: skip
+                return request
+            variables = payload.get("variables")
+            if isinstance(variables, dict) and variables.get("after") not in (None, ""):
+                variables["after"] = self.SYNTHETIC_CURSOR
+                new_text = json.dumps(payload)
+                request.body = new_text.encode("utf-8") if is_bytes else new_text
+            return request
+
+        # -- response: overwrite every node value + endCursor -----------------------------
 
         def before_record_response(self, response: dict) -> dict:
             body = response.get("body")
@@ -105,24 +181,31 @@ try:
             if not isinstance(data, dict):
                 return False
             changed = False
-            for obj in data.values():
+            for key, obj in data.items():
                 if not isinstance(obj, dict):
                     continue
                 nodes = obj.get("nodes")
-                if not isinstance(nodes, list) or not nodes:
+                if not isinstance(nodes, list):
                     continue
-                if self._is_field_catalog(nodes):
-                    obj["nodes"] = [dict(field) for field in self._SYNTHETIC_FIELD_CATALOG]
-                    if "totalCount" in obj:
-                        obj["totalCount"] = len(obj["nodes"])
+                page_info = obj.get("pageInfo")
+                if isinstance(page_info, dict) and page_info.get("endCursor"):
+                    self._cursor_counter += 1
+                    page_info["endCursor"] = f"{self.SYNTHETIC_CURSOR}-{self._cursor_counter:04d}"
                     changed = True
+                if not nodes:
+                    continue
+                # The field metadata catalogue (the `fields` query) has a fixed replacement so
+                # the field pickers stay deterministic; every other connection's nodes are
+                # value-overwritten in place regardless of shape (fieldData / data / bare scalar).
+                if key == "fields" and self._is_field_catalog(nodes):
+                    obj["nodes"] = [dict(field) for field in self._SYNTHETIC_FIELD_CATALOG]
                 else:
                     for node in nodes:
                         if isinstance(node, dict):
                             self._synthesize_node(node)
-                            changed = True
-                    if "totalCount" in obj:
-                        obj["totalCount"] = len(nodes)
+                if "totalCount" in obj:
+                    obj["totalCount"] = len(obj["nodes"])
+                changed = True
             return changed
 
         @staticmethod
@@ -131,19 +214,49 @@ try:
             return isinstance(head, dict) and "dataType" in head and "values" not in head
 
         def _synthesize_node(self, node: dict) -> None:
+            """Overwrite every field of one node, detecting each value's shape."""
             self._node_counter += 1
             n = self._node_counter
-            for key, value in node.items():
-                if isinstance(value, dict) and "values" in value:
-                    original = value.get("values") or []
-                    value["values"] = self._synthetic_values(key, n, original)
-                elif key == "id":
-                    node[key] = f"RESP-{n:04d}"
+            for key in list(node.keys()):
+                node[key] = self._synthesize_field(key, n, node[key])
+
+        def _synthesize_field(self, key: str, n: int, value: Any) -> Any:
+            """Return a synthetic replacement for one field value, preserving its shape."""
+            if key == "id":
+                return f"RESP-{n:04d}"
+            if isinstance(value, dict):
+                if "value" in value or "values" in value:  # shapes (a)/(b): fieldData / data
+                    new = dict(value)
+                    if isinstance(new.get("values"), list):
+                        new["values"] = self._synthetic_values(key, n, new["values"])
+                    if new.get("value") is not None:
+                        new["value"] = self._synthetic_scalar(key, n, 0, [new["value"]])
+                    return new
+                # Any other nested object → recurse so no real leaf value survives.
+                return {k: self._synthesize_field(k, n, v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [self._synthesize_field(key, n, item) for item in value]
+            if value is None or isinstance(value, bool):
+                return value  # a boolean carries no PII; leave it deterministic
+            if isinstance(value, (int, float)):  # fmt: skip
+                return self._synthetic_number(key, n, value)
+            return self._synthetic_scalar(key, n, 0, [value])  # shape (c): bare scalar string
+
+        def _synthetic_number(self, alias: str, n: int, value: int | float) -> int | float:
+            """Synthetic numeric replacement, preserving int/float and epoch magnitude."""
+            if isinstance(value, float):
+                return round(1.5 + n * 0.5, 2)
+            if value >= self._EPOCH_INT_THRESHOLD:  # keep an epoch-seconds integer epoch-shaped
+                return _SANITIZER_EPOCH_SECONDS + n
+            return n
 
         def _synthetic_values(self, alias: str, n: int, original: list) -> list[str]:
-            """Replace a field's values with synthetic ones, preserving ARITY and SHAPE."""
-            count = max(len(original), 1)
-            return [self._synthetic_scalar(alias, n, i, original) for i in range(count)]
+            """Replace a field's values with synthetic ones, preserving EXACT ARITY and SHAPE.
+
+            An empty ``values`` list stays empty (the field had no value for that node → the
+            flatten collapses it to None), so synthetic data mirrors the real cardinality.
+            """
+            return [self._synthetic_scalar(alias, n, i, original) for i in range(len(original))]
 
         def _synthetic_scalar(self, alias: str, n: int, i: int, original: list) -> str:
             a = alias.lower()
@@ -164,6 +277,8 @@ try:
                 return self.SYNTHETIC_COMMENT
             if "email" in a:
                 return f"user{ordinal:06d}@example.com"
+            if "url" in a:
+                return f"https://synthetic.example.com/{alias}/{ordinal:06d}"
             return f"synthetic-{alias}-{ordinal:06d}"
 
         @staticmethod
@@ -246,6 +361,8 @@ class Component(ComponentBase):
             supports_filter=shape.supports_filter,
             supports_order=shape.supports_order,
             has_id=shape.has_id,
+            first_type=shape.first_type,
+            after_type=shape.after_type,
         )
         query = builder.build_query(lower_bound, upper_bound)
         columns = builder.selection_columns()
