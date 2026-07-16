@@ -1,14 +1,14 @@
 # Medallia Experience Cloud Extractor
 
-Extracts customer feedback and experience data from Medallia Experience Cloud using the Medallia Query API, a GraphQL interface for feedback and analytics.
+Extracts data from Medallia Experience Cloud through the Medallia Query API — a single GraphQL endpoint. The component is introspection-driven: it discovers the queryable objects on your instance and extracts any of them (feedback, invitations, customers, programs, and other collections) into tables, or runs a raw GraphQL query you author.
 
 ## Features
 
-- Retrieves feedback records with a configurable set of output columns, each selected by its Medallia field ID.
-- Field selection is metadata-driven: field IDs can be picked from the live instance catalog or entered manually.
-- Incremental loading keeps a per-configuration watermark on a finish-date field and fetches only records added since the last run; a full-load mode is also available.
-- Supports both epoch-seconds and ISO 8601 datetime finish-date fields.
-- Optional business filters (a raw Medallia filter tree) can be merged into each query.
+- **Any object, one table per configuration row.** The data object is picked from a list auto-populated by live schema introspection (or entered manually if introspection is disabled).
+- **Metadata-driven field selection.** Fields are chosen by name from the object's catalog, or left empty to take all scalar fields. Different Medallia node shapes (`fieldData`, `data`, plain scalar) are handled automatically.
+- **Incremental loading** where the object supports it: a per-configuration watermark on a date field fetches only newer records; the value format (epoch or ISO datetime) is auto-detected. Objects without a suitable date field load in full.
+- **Raw GraphQL mode** for advanced use: supply a query returning a single paginated connection and the component handles cursor pagination and flattening.
+- **Optional business filters** (a Medallia filter tree, as JSON) merged into each structured query.
 
 ## Authentication
 
@@ -16,4 +16,4 @@ Uses OAuth 2.0 with the client-credentials grant. Provide the reporting instance
 
 ## Output
 
-Writes one table per configuration row, keyed by the survey identifier so incremental runs upsert rather than duplicate records.
+Writes one table per configuration row. The primary key is the object's own record `id` where the API exposes one; for objects without a stable id, a deterministic row hash is used. Incremental runs upsert on the primary key rather than duplicating records.

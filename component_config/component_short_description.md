@@ -1,1 +1,1 @@
-Extracts feedback and experience records from Medallia Experience Cloud via the Query API.
+Extracts any Medallia Experience Cloud object (feedback, invitations, customers, and more) via the Query API, or runs a raw GraphQL query.
