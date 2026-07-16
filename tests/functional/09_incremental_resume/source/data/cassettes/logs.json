@@ -23,19 +23,19 @@
     {
       "level": "INFO",
       "logger": "root",
-      "message": "Fetched page 1: 5 node(s), totalCount=7434.",
+      "message": "Fetched page 1: 5 node(s), totalCount=5.",
       "timestamp": "2026-07-16T12:00:00.000Z"
     },
     {
       "level": "INFO",
       "logger": "root",
-      "message": "Fetched page 2: 5 node(s), totalCount=7430.",
+      "message": "Fetched page 2: 5 node(s), totalCount=5.",
       "timestamp": "2026-07-16T12:00:00.000Z"
     },
     {
       "level": "INFO",
       "logger": "root",
-      "message": "Fetched page 3: 5 node(s), totalCount=7426.",
+      "message": "Fetched page 3: 5 node(s), totalCount=5.",
       "timestamp": "2026-07-16T12:00:00.000Z"
     },
     {

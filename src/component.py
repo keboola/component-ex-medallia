@@ -97,7 +97,7 @@ try:
                 return response
             try:
                 payload = json.loads(text)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):  # fmt: skip
                 return response
             if not self._synthesize(payload):
                 return response
@@ -126,6 +126,14 @@ try:
                         if isinstance(node, dict):
                             self._synthesize_node(node)
                             changed = True
+                    # Scrub the real aggregate feedback volume: the recorded totalCount is the
+                    # customer's true matching-record count. Overwrite it with the page node
+                    # count (as the field-catalog branch does) — a value consistent with the
+                    # self-terminating pagination logic, where a page whose totalCount is below
+                    # page_size is the last page. A full page keeps totalCount == page_size, so
+                    # ``total_count < page_size`` stays False and pages still stitch on replay.
+                    if "totalCount" in obj:
+                        obj["totalCount"] = len(nodes)
             return changed
 
         @staticmethod
