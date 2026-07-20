@@ -71,7 +71,7 @@
         "dependencies": {
           "mode": "raw"
         },
-        "tooltip": "Must declare $first: Int and $after: String, pass them to exactly one top-level connection, and select nodes { … } and pageInfo { hasNextPage endCursor }. The component injects first/after and pages via pageInfo. Raw mode is always a full load; embed your own date filter for incremental extraction."
+        "tooltip": "Must declare $first and $after variables (with your connection's ACTUAL argument types — on Medallia these are typically first: Int! and after: ID, not Int/String), pass them to exactly one top-level connection, and select nodes { … } and pageInfo { hasNextPage endCursor }. The component injects first/after (after starts as null, then the endCursor) and pages via pageInfo, but runs your query verbatim without rewriting variable types. Raw mode is always a full load; embed your own date filter for incremental extraction."
       },
       "propertyOrder": 40
     },

@@ -1,6 +1,6 @@
 """Separated generic Medallia Query API (GraphQL) client package."""
 
-from client.medallia_client import (
+from .medallia_client import (
     METADATA_CATALOG_DENYLIST,
     SHAPE_DATA,
     SHAPE_FIELDDATA,

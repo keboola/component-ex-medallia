@@ -396,7 +396,7 @@ class Component(ComponentBase):
         field_meta = self._field_metadata(client, shape)
         do_incremental, is_int = self._incremental_plan(row, shape, field_meta)
 
-        lower_bound = self._seed_lower_bound(row) if do_incremental else None
+        lower_bound = self._seed_lower_bound(row, is_int) if do_incremental else None
         upper_bound = self._upper_bound(is_int) if do_incremental else None
 
         scalar_fields = list(shape.scalar_fields) if shape.shape in (SHAPE_DATA, SHAPE_SCALAR) else []
@@ -517,18 +517,33 @@ class Component(ComponentBase):
             return str(data_type).upper() in {"INT", "INTEGER"}
         return shape.scalar_fields.get(field_id) == "Int"
 
-    def _seed_lower_bound(self, row: RowConfiguration) -> int | str | None:
-        """Lower bound = stored watermark → first-run ``initial_start`` → none (full history)."""
+    def _seed_lower_bound(self, row: RowConfiguration, is_int: bool) -> int | str | None:
+        """Lower bound = stored watermark → first-run ``initial_start`` → none (full history).
+
+        For an INT watermark the seed is coerced to ``int`` so the first ``advance_watermark``
+        call compares numerically. A string seed (e.g. ``initial_start``) would otherwise force
+        the lexicographic branch and can under-advance the watermark on the first run.
+        """
         state = self.get_state_file() or {}
         stored = state.get(STATE_LAST_INCREMENTAL_VALUE)
         if stored is not None and str(stored) != "":
             logging.info("Resuming from stored watermark (%s).", stored)
-            return stored
+            return self._coerce_seed(stored, is_int)
         if row.initial_start.strip():
             logging.info("First run: seeding lower bound from initial_start.")
-            return row.initial_start.strip()
+            return self._coerce_seed(row.initial_start.strip(), is_int)
         logging.info("No stored watermark and no initial_start; loading full history.")
         return None
+
+    @staticmethod
+    def _coerce_seed(value: int | str, is_int: bool) -> int | str:
+        """Coerce a watermark seed to ``int`` for an INT field; leave non-numeric input as-is."""
+        if not is_int:
+            return value
+        try:
+            return int(value)
+        except TypeError, ValueError:
+            return value
 
     @staticmethod
     def _upper_bound(is_int: bool) -> int | str:

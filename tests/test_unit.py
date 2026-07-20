@@ -845,6 +845,29 @@ class TestAdvanceWatermark:
     def test_seeds_from_none_current_string(self):
         assert advance_watermark(None, "2024-01-01", is_int=False) == "2024-01-01"
 
+    def test_mixed_str_current_int_candidate_compares_lexicographically(self):
+        # A str ``current`` against an int ``candidate`` (even with is_int=True) falls to the
+        # lexicographic branch, so "5" is (wrongly) kept over 10. This is why an INT seed must be
+        # coerced to int BEFORE it reaches advance_watermark (see Component._coerce_seed).
+        assert advance_watermark("5", 10, is_int=True) == "5"
+        # Once the seed is an int, comparison is numeric and the max wins as expected.
+        assert advance_watermark(5, 10, is_int=True) == 10
+
+
+class TestCoerceSeed:
+    def test_int_field_coerces_numeric_string_to_int(self):
+        assert Component._coerce_seed("5", is_int=True) == 5
+        assert Component._coerce_seed("1700000000", is_int=True) == 1700000000
+
+    def test_int_field_leaves_non_numeric_seed_unchanged(self):
+        assert Component._coerce_seed("not-a-number", is_int=True) == "not-a-number"
+
+    def test_non_int_field_leaves_seed_as_string(self):
+        assert Component._coerce_seed("2024-01-01", is_int=False) == "2024-01-01"
+
+    def test_int_seed_passthrough(self):
+        assert Component._coerce_seed(42, is_int=True) == 42
+
 
 class TestUpperBound:
     def test_int_upper_bound_is_epoch_seconds(self):
