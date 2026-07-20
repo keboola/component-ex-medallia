@@ -105,6 +105,17 @@ INTROSPECTION = {
     }
 }
 
+# customerSchema (ContactSchema) — the `customers` object's field metadata source (spec §6.3).
+# A singleton wrapping a `fields` list (not a Relay `nodes` connection like the global catalogue).
+CUSTOMER_SCHEMA = {
+    "customerSchema": {
+        "fields": [
+            {"id": "email", "name": "Email", "dataType": "EMAIL", "sortable": False, "multivalued": False},
+            {"id": "tags", "name": "Tags", "dataType": "STRING", "sortable": False, "multivalued": True},
+        ]
+    }
+}
+
 FIELD_CATALOG = {
     "fields": {
         "nodes": [
@@ -159,6 +170,8 @@ class StubSession:
             return _StubResponse({"data": INTROSPECTION})
         if "__typename" in query:
             return _StubResponse({"data": {"__typename": "Query"}})
+        if "customerSchema" in query:
+            return _StubResponse({"data": CUSTOMER_SCHEMA})
         if "fields(first: 1000)" in query:
             return _StubResponse({"data": FIELD_CATALOG})
         # data query — find which registered object appears as a connection field

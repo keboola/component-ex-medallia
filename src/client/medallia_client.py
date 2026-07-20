@@ -234,7 +234,17 @@ class MedalliaTokenManager:
         if response.status_code >= 400:
             raise MedalliaClientError(f"Medallia token endpoint returned HTTP {response.status_code}.")
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            # A 2xx with a non-JSON/empty body is almost always a wrong host/tenant (the request
+            # hit something other than the OAuth token endpoint), i.e. user-actionable → exit 1,
+            # never an uncaught JSONDecodeError → exit 2.
+            raise UserException(
+                f"Medallia token endpoint returned a non-JSON response (HTTP {response.status_code}). "
+                "Check instance_host and company_name (the token URL is "
+                "https://<instance_host>/oauth/<company_name>/token)."
+            ) from None
         token = payload.get("access_token")
         if not token:
             raise MedalliaClientError("Medallia token response did not contain an access_token.")
@@ -707,7 +717,16 @@ class MedalliaClient:
                 raise MedalliaClientError(f"Medallia returned unexpected HTTP {response.status_code}.")
 
             self._apply_rate_limit(response.headers)
-            return response.json()
+            try:
+                return response.json()
+            except ValueError:
+                # A 2xx with a non-JSON/empty body means the request did not reach the Query API
+                # (wrong api_host, or a proxy/HTML error page); user-actionable → exit 1, never an
+                # uncaught JSONDecodeError → exit 2.
+                raise UserException(
+                    f"Medallia Query API returned a non-JSON response (HTTP {response.status_code}). "
+                    "Check the API host (requests go to https://<api_host>/data/v0/query)."
+                ) from None
 
     @staticmethod
     def _raise_for_graphql_errors(payload: dict[str, Any], compute_cost_only: bool = False) -> None:

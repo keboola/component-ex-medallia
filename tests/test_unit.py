@@ -21,6 +21,7 @@ import requests
 from freezegun import freeze_time
 from keboola.component.dao import BaseType
 from keboola.component.exceptions import UserException
+from keboola.component.sync_actions import MessageType
 
 from client.medallia_client import (
     SHAPE_DATA,
@@ -48,12 +49,23 @@ from configuration import MAX_PAGE_SIZE, Configuration, RowConfiguration
 class _StubResponse:
     """Minimal stand-in for ``requests.Response``."""
 
-    def __init__(self, status_code: int = 200, json_data: dict | None = None, headers: dict | None = None):
+    def __init__(
+        self,
+        status_code: int = 200,
+        json_data: dict | None = None,
+        headers: dict | None = None,
+        raise_json: bool = False,
+    ):
         self.status_code = status_code
         self._json_data = json_data if json_data is not None else {}
         self.headers = headers or {}
+        # When True, ``json()`` raises like ``requests`` does on a non-JSON / empty 2xx body
+        # (``requests.exceptions.JSONDecodeError`` is a ``ValueError`` subclass).
+        self._raise_json = raise_json
 
     def json(self) -> dict:
+        if self._raise_json:
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
         return self._json_data
 
 
@@ -1177,3 +1189,242 @@ class TestHumanize:
 
     def test_social_urls_health(self):
         assert Component._humanize("socialUrlsHealth") == "Social Urls Health"
+
+
+# ==================================================================================================
+# 15. 2xx non-JSON body guard (IMP-2) — never an uncaught JSONDecodeError -> exit 2
+# ==================================================================================================
+
+
+class TestNonJsonResponseGuard:
+    """A 2xx with a non-JSON / empty body is user-actionable (wrong host) -> UserException (exit 1)."""
+
+    def test_token_endpoint_non_json_2xx_raises_user_exception(self):
+        session = _StubSession([_StubResponse(status_code=200, raise_json=True)])
+        manager = MedalliaTokenManager("acme.medallia.com", "acme", "cid", "secret", session=session)
+        with pytest.raises(UserException, match="non-JSON"):
+            manager.get_token()
+
+    def test_query_api_non_json_2xx_raises_user_exception(self):
+        session = _StubSession([_StubResponse(status_code=200, raise_json=True)])
+        client = MedalliaClient(api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session)
+        with pytest.raises(UserException, match="non-JSON"):
+            client.run_metadata_query("query { __typename }")
+
+    def test_query_api_non_json_2xx_message_names_api_host(self):
+        session = _StubSession([_StubResponse(status_code=200, raise_json=True)])
+        client = MedalliaClient(api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session)
+        with pytest.raises(UserException) as exc_info:
+            client.run_metadata_query("query { __typename }")
+        assert "API host" in str(exc_info.value)
+
+
+# ==================================================================================================
+# 16. Object-aware field-metadata routing (IMP-1, spec §6.3) — customerSchema for `customers`
+# ==================================================================================================
+
+
+class _StubMetadataClient:
+    """Client double exposing only ``run_metadata_query`` (for sync-action / metadata tests)."""
+
+    def __init__(self, response: dict | None = None, error: Exception | None = None):
+        self._response = response if response is not None else {}
+        self._error = error
+        self.queries: list[dict] = []
+
+    def run_metadata_query(self, query: str, **kwargs) -> dict:
+        self.queries.append({"query": query, **kwargs})
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
+# customerSchema (ContactSchema) metadata — {id, name, dataType, sortable, multivalued}. Covers a
+# DATE, a DATETIME, a sortable epoch-style INT (the incremental candidate), a NON-sortable INT
+# (must NOT surface as a date field) and plain string/email fields.
+_CUSTOMER_SCHEMA_RESPONSE = {
+    "customerSchema": {
+        "fields": [
+            {"id": "c_email", "name": "Email", "dataType": "EMAIL", "sortable": False, "multivalued": False},
+            {"id": "c_created", "name": "Created Date", "dataType": "DATE", "sortable": True, "multivalued": False},
+            {"id": "c_lastseen", "name": "Last Seen", "dataType": "DATETIME", "sortable": True, "multivalued": False},
+            {"id": "c_loyalty", "name": "Loyalty Points", "dataType": "INT", "sortable": True, "multivalued": False},
+            {"id": "c_nps", "name": "NPS", "dataType": "INT", "sortable": False, "multivalued": False},
+            {"id": "c_name", "name": "Full Name", "dataType": "STRING", "sortable": False, "multivalued": False},
+        ]
+    }
+}
+
+
+class TestMetadataNodeRouting:
+    def test_customers_routes_to_customer_schema(self):
+        shape = ObjectShape("customers", SHAPE_DATA, True, False, False)
+        assert Component._metadata_node(shape) == "customerSchema"
+
+    def test_fielddata_object_routes_to_fields_catalog(self):
+        shape = ObjectShape("feedback", SHAPE_FIELDDATA, True, True, True)
+        assert Component._metadata_node(shape) == "fields"
+
+    def test_scalar_object_has_no_catalogue(self):
+        shape = ObjectShape("programs", SHAPE_SCALAR, True, False, False, scalar_fields={"name": "String"})
+        assert Component._metadata_node(shape) is None
+
+
+class TestFieldMetadataRouting:
+    def test_customers_metadata_from_customer_schema_and_types_from_datatype(self):
+        client = _StubMetadataClient(_CUSTOMER_SCHEMA_RESPONSE)
+        shape = ObjectShape("customers", SHAPE_DATA, True, False, False, scalar_fields={"c_id": "String"})
+        comp = object.__new__(Component)
+        meta = comp._field_metadata(client, shape)
+        # routed to customerSchema (NOT the global `fields` catalogue)
+        assert "customerSchema" in client.queries[0]["query"]
+        assert meta["c_created"]["dataType"] == "DATE"
+        # introspected bare node scalar is preserved (merged, not dropped)
+        assert meta["c_id"] == {"scalar_type": "String"}
+        # _base_type now types customers columns from dataType instead of defaulting to string
+        assert Component._base_type("c_created", meta) == BaseType.date()
+        assert Component._base_type("c_lastseen", meta) == BaseType.timestamp()
+        assert Component._base_type("c_loyalty", meta) == BaseType.integer()
+
+    def test_metadata_fetch_failure_degrades_to_scalar_seed(self):
+        client = _StubMetadataClient(error=MedalliaClientError("boom"))
+        shape = ObjectShape("customers", SHAPE_DATA, True, False, False, scalar_fields={"c_id": "String"})
+        comp = object.__new__(Component)
+        meta = comp._field_metadata(client, shape)
+        assert meta == {"c_id": {"scalar_type": "String"}}
+
+
+def _bare_component(monkeypatch, row: RowConfiguration, client: _StubMetadataClient, shape: ObjectShape) -> Component:
+    """A Component instance bypassing ComponentBase.__init__, with the datadir-touching
+    collaborators (config/client/shape) stubbed so a sync action runs purely in memory."""
+    comp = object.__new__(Component)
+    monkeypatch.setattr(comp, "_get_row", lambda: row)
+    monkeypatch.setattr(comp, "_get_config", lambda: None)
+    monkeypatch.setattr(comp, "_build_client", lambda config: client)
+    monkeypatch.setattr(comp, "_resolve_object", lambda c, name: shape)
+    return comp
+
+
+class TestListFieldsCustomers:
+    def test_list_fields_returns_all_customer_schema_fields_by_name(self, monkeypatch):
+        client = _StubMetadataClient(_CUSTOMER_SCHEMA_RESPONSE)
+        row = RowConfiguration(data_object="customers", mode="structured")
+        shape = ObjectShape("customers", SHAPE_DATA, True, False, False)
+        comp = _bare_component(monkeypatch, row, client, shape)
+        elements = Component.list_fields.__wrapped__(comp)
+        assert {e.value for e in elements} == {"c_email", "c_created", "c_lastseen", "c_loyalty", "c_nps", "c_name"}
+        assert {e.value: e.label for e in elements}["c_created"] == "Created Date"
+
+
+# ==================================================================================================
+# 17. listDateFields (IMP-3) — DATE/DATETIME + sortable INT (epoch auto-detect), names shown
+# ==================================================================================================
+
+
+class TestListDateFields:
+    def _component(self, monkeypatch) -> tuple[Component, _StubMetadataClient]:
+        client = _StubMetadataClient(_CUSTOMER_SCHEMA_RESPONSE)
+        row = RowConfiguration(data_object="customers", mode="structured")
+        shape = ObjectShape("customers", SHAPE_DATA, True, False, False)
+        return _bare_component(monkeypatch, row, client, shape), client
+
+    def test_returns_only_date_datetime_and_sortable_int_fields(self, monkeypatch):
+        comp, _ = self._component(monkeypatch)
+        elements = Component.list_date_fields.__wrapped__(comp)
+        # c_created (DATE), c_lastseen (DATETIME), c_loyalty (sortable INT epoch candidate);
+        # NOT c_nps (INT but not sortable), NOT c_email/c_name (non-date).
+        assert {e.value for e in elements} == {"c_created", "c_lastseen", "c_loyalty"}
+
+    def test_non_sortable_int_is_excluded(self, monkeypatch):
+        comp, _ = self._component(monkeypatch)
+        values = {e.value for e in Component.list_date_fields.__wrapped__(comp)}
+        assert "c_nps" not in values
+
+    def test_labels_are_field_names(self, monkeypatch):
+        comp, _ = self._component(monkeypatch)
+        labels = {e.value: e.label for e in Component.list_date_fields.__wrapped__(comp)}
+        assert labels["c_lastseen"] == "Last Seen"
+
+    def test_routed_to_customer_schema_not_global_fields_catalogue(self, monkeypatch):
+        comp, client = self._component(monkeypatch)
+        Component.list_date_fields.__wrapped__(comp)
+        assert "customerSchema" in client.queries[0]["query"]
+
+    def test_scalar_int_field_surfaces_for_scalar_shape(self, monkeypatch):
+        # Shape (c) has no catalogue: a sortable-int equivalent is surfaced from the introspected
+        # scalar type (`Int`), covering the epoch auto-detect on the scalar path too.
+        client = _StubMetadataClient({})
+        row = RowConfiguration(data_object="programs", mode="structured")
+        shape = ObjectShape(
+            "programs", SHAPE_SCALAR, True, False, False, scalar_fields={"seq": "Int", "name": "String"}
+        )
+        comp = _bare_component(monkeypatch, row, client, shape)
+        values = {e.value for e in Component.list_date_fields.__wrapped__(comp)}
+        assert values == {"seq"}
+
+
+# ==================================================================================================
+# 18. validateQuery (IMP-3) — accept valid single-connection; reject with clean message (exit 1)
+# ==================================================================================================
+
+
+class TestValidateQuery:
+    VALID_QUERY = (
+        "query ($first: Int, $after: String) { feedback(first: $first, after: $after) "
+        "{ nodes { id } pageInfo { hasNextPage endCursor } } }"
+    )
+
+    def _component(self, monkeypatch, raw_query: str, client: _StubMetadataClient) -> Component:
+        row = RowConfiguration(mode="raw", raw_query=raw_query, output_table="t", page_size=50)
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "_get_row", lambda: row)
+        monkeypatch.setattr(comp, "_get_config", lambda: None)
+        monkeypatch.setattr(comp, "_build_client", lambda config: client)
+        return comp
+
+    def test_accepts_valid_single_connection_query(self, monkeypatch):
+        client = _StubMetadataClient({})  # compute_cost_only pre-flight returns no errors
+        comp = self._component(monkeypatch, self.VALID_QUERY, client)
+        result = Component.validate_query.__wrapped__(comp)
+        assert result.type != MessageType.ERROR
+        assert "compiled successfully" in result.message
+        # priced as a cost-only pre-flight with the paging variables (does not consume quota)
+        assert client.queries[0]["compute_cost_only"] is True
+        assert client.queries[0]["variables"] == {"first": 50, "after": None}
+
+    def test_rejects_missing_pageinfo_before_any_call(self, monkeypatch):
+        client = _StubMetadataClient({})
+        query = "query ($first: Int, $after: String) { feedback(first: $first, after: $after) { nodes { id } } }"
+        comp = self._component(monkeypatch, query, client)
+        result = Component.validate_query.__wrapped__(comp)
+        assert result.type == MessageType.ERROR
+        assert "pageInfo" in result.message
+        assert client.queries == []  # static contract check fails before the gateway is touched
+
+    def test_rejects_missing_variables(self, monkeypatch):
+        client = _StubMetadataClient({})
+        query = "query { feedback { nodes { id } pageInfo { hasNextPage endCursor } } }"
+        comp = self._component(monkeypatch, query, client)
+        result = Component.validate_query.__wrapped__(comp)
+        assert result.type == MessageType.ERROR
+        assert "$first" in result.message
+        assert "$after" in result.message
+
+    def test_rejects_cost_or_compile_failure_as_error_not_exit_2(self, monkeypatch):
+        # A cost/compile failure surfaces as a UserException from the client; validateQuery
+        # converts it to a clean ERROR result rather than letting it escalate.
+        client = _StubMetadataClient(error=UserException("Estimated query cost exceeds the 3M ceiling"))
+        comp = self._component(monkeypatch, self.VALID_QUERY, client)
+        result = Component.validate_query.__wrapped__(comp)
+        assert result.type == MessageType.ERROR
+        assert "validation failed" in result.message
+
+    def test_zero_and_multi_connection_rejected_at_runtime_with_user_exception(self):
+        # validateQuery is a cost-only pre-flight and cannot count connections; the zero/multi
+        # rejection is enforced at run time by `_raw_connection`, as a UserException (exit 1, not
+        # an uncaught error -> exit 2).
+        with pytest.raises(UserException, match="no Relay connection"):
+            Component._raw_connection({"onlyScalar": 1})
+        two = {"feedback": {"nodes": [], "pageInfo": {}}, "customers": {"nodes": [], "pageInfo": {}}}
+        with pytest.raises(UserException, match="exactly one connection"):
+            Component._raw_connection(two)

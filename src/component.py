@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -318,8 +319,56 @@ except ImportError:  # pragma: no cover - production image has no dev dependenci
 # state.json key for the single-scalar incremental watermark (spec §8).
 STATE_LAST_INCREMENTAL_VALUE = "last_incremental_value"
 
-# Global field-catalogue query (shape-a metadata source; spec §6.3).
-_FIELDS_CATALOG_QUERY = "query { fields(first: 1000) { nodes { id name dataType sortable multivalued } } }"
+
+@dataclass(frozen=True)
+class _MetadataCatalog:
+    """A field-definition metadata source (spec §6.3).
+
+    ``query`` fetches the catalogue; ``container`` is the key path from the response ``data`` to
+    the list of ``{id, name, dataType, sortable, multivalued}`` field definitions.
+    """
+
+    query: str
+    container: tuple[str, ...]
+
+    def extract(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        node: Any = data
+        for key in self.container:
+            node = node.get(key) if isinstance(node, dict) else None
+        return [item for item in (node or []) if isinstance(item, dict)]
+
+
+# Field-metadata catalogues keyed by metadata-node name (spec §6.3). All expose the same
+# ``{id, name, dataType, sortable, multivalued}`` field-definition shape, so a single extractor
+# types every object. ``fields`` is the global shape-(a) catalogue (feedback / invitations) and,
+# with ``eventSchemas`` / ``programRecordSchemas``, is a Relay connection (``{nodes{…}}``);
+# ``customerSchema`` (ContactSchema) is the singleton that types the ``customers`` object
+# (shape b) and wraps its definitions in a ``fields`` list.
+_METADATA_CATALOGS: dict[str, _MetadataCatalog] = {
+    "fields": _MetadataCatalog(
+        "query { fields(first: 1000) { nodes { id name dataType sortable multivalued } } }",
+        ("fields", "nodes"),
+    ),
+    "customerSchema": _MetadataCatalog(
+        "query { customerSchema { fields { id name dataType sortable multivalued } } }",
+        ("customerSchema", "fields"),
+    ),
+    "eventSchemas": _MetadataCatalog(
+        "query { eventSchemas(first: 1000) { nodes { id name dataType sortable multivalued } } }",
+        ("eventSchemas", "nodes"),
+    ),
+    "programRecordSchemas": _MetadataCatalog(
+        "query { programRecordSchemas(first: 1000) { nodes { id name dataType sortable multivalued } } }",
+        ("programRecordSchemas", "nodes"),
+    ),
+}
+
+# Objects whose field metadata comes from a dedicated catalogue instead of the shape-based
+# default (spec §6.3). ``customers`` (shape b) is typed by ``customerSchema``. Event and
+# program-record connections register here by their instance-specific object name mapping to
+# ``eventSchemas`` / ``programRecordSchemas``; the reference instance exposes none as extractable
+# objects, so only ``customers`` is wired today.
+_OBJECT_METADATA_NODE: dict[str, str] = {"customers": "customerSchema"}
 
 
 class Component(ComponentBase):
@@ -330,7 +379,7 @@ class Component(ComponentBase):
 
     # -- orchestration -----------------------------------------------------------------
 
-    def run(self):
+    def run(self) -> None:
         """Orchestrate a single config-row extract (structured or raw mode)."""
         config = self._get_config()
         row = self._get_row()
@@ -400,7 +449,8 @@ class Component(ComponentBase):
     def _get_row(self) -> RowConfiguration:
         return RowConfiguration(**self.configuration.parameters)
 
-    def _build_client(self, config: Configuration) -> MedalliaClient:
+    @staticmethod
+    def _build_client(config: Configuration) -> MedalliaClient:
         token_manager = MedalliaTokenManager(
             instance_host=config.instance_host,
             company_name=config.company_name,
@@ -415,7 +465,8 @@ class Component(ComponentBase):
 
     # -- object / shape resolution -----------------------------------------------------
 
-    def _resolve_object(self, client: MedalliaClient, object_name: str) -> ObjectShape:
+    @staticmethod
+    def _resolve_object(client: MedalliaClient, object_name: str) -> ObjectShape:
         """Resolve an object's shape via introspection, falling back to the static map.
 
         Some tenants disable ``__schema`` introspection; that surfaces as a GraphQL error
@@ -498,22 +549,50 @@ class Component(ComponentBase):
 
     # -- field metadata ----------------------------------------------------------------
 
-    def _field_metadata(self, client: MedalliaClient, shape: ObjectShape) -> dict[str, dict[str, Any]]:
-        """Per-field metadata for typing + watermark detection, routed by node shape (spec §6.3).
+    @staticmethod
+    def _metadata_node(shape: ObjectShape) -> str | None:
+        """Return the metadata-catalogue node for an object, or None (spec §6.3).
 
-        Shape (a) reads the global ``fields`` catalogue (id → dataType/sortable/multivalued).
-        Shapes (b)/(c) derive types from the introspected scalar node fields (GraphQL scalar
-        type); when no catalogue is available a column defaults to STRING.
+        ``customers`` → ``customerSchema`` (and any object registered in
+        ``_OBJECT_METADATA_NODE``); shape-(a) ``fieldData`` objects → the global ``fields``
+        catalogue; shape-(c) scalar objects → None, i.e. types come from introspected node
+        scalars, not a catalogue.
         """
+        node = _OBJECT_METADATA_NODE.get(shape.name)
+        if node is not None:
+            return node
         if shape.shape == SHAPE_FIELDDATA:
-            try:
-                data = client.run_metadata_query(_FIELDS_CATALOG_QUERY)
-            except MedalliaClientError as exc:
-                logging.warning("Could not load field metadata (%s); columns default to STRING.", exc)
-                return {}
-            nodes = ((data.get("fields") or {}).get("nodes")) or []
-            return {node["id"]: node for node in nodes if node.get("id")}
-        return {name: {"scalar_type": scalar_type} for name, scalar_type in shape.scalar_fields.items()}
+            return "fields"
+        return None
+
+    def _field_metadata(self, client: MedalliaClient, shape: ObjectShape) -> dict[str, dict[str, Any]]:
+        """Per-field metadata for typing + watermark detection, routed by object/shape (spec §6.3).
+
+        Introspected bare node scalars seed the map (GraphQL scalar type). When the object has a
+        dedicated metadata catalogue — the global ``fields`` catalogue for shape (a),
+        ``customerSchema`` for ``customers`` (shape b), ``eventSchemas`` / ``programRecordSchemas``
+        for event / program-record connections — its ``dataType`` definitions are merged in and
+        win over the bare scalar type, so ``listFields``/``listDateFields`` surface fields by name
+        and ``_base_type`` types them from ``dataType``. A catalogue-fetch failure degrades to the
+        scalar seed (columns default to STRING) rather than aborting the run.
+        """
+        metadata: dict[str, dict[str, Any]] = {
+            name: {"scalar_type": scalar_type} for name, scalar_type in shape.scalar_fields.items()
+        }
+        node = self._metadata_node(shape)
+        if node is None:
+            return metadata
+        catalog = _METADATA_CATALOGS[node]
+        try:
+            data = client.run_metadata_query(catalog.query)
+        except MedalliaClientError as exc:
+            logging.warning("Could not load field metadata for '%s' (%s); columns default to STRING.", shape.name, exc)
+            return metadata
+        for definition in catalog.extract(data):
+            field_id = definition.get("id")
+            if field_id:
+                metadata[field_id] = definition
+        return metadata
 
     # -- output ------------------------------------------------------------------------
 
@@ -720,18 +799,20 @@ class Component(ComponentBase):
             return []
         client = self._build_client(self._get_config())
         shape = self._resolve_object(client, row.data_object)
-        if shape.shape == SHAPE_FIELDDATA:
-            return self._catalog_field_elements(client, date_only)
-        return self._scalar_field_elements(shape, date_only)
+        node = self._metadata_node(shape)
+        if node is None:
+            return self._scalar_field_elements(shape, date_only)
+        return self._catalog_field_elements(client, _METADATA_CATALOGS[node], date_only)
 
-    def _catalog_field_elements(self, client: MedalliaClient, date_only: bool) -> list[SelectElement]:
+    def _catalog_field_elements(
+        self, client: MedalliaClient, catalog: _MetadataCatalog, date_only: bool
+    ) -> list[SelectElement]:
         try:
-            data = client.run_metadata_query(_FIELDS_CATALOG_QUERY)
+            data = client.run_metadata_query(catalog.query)
         except MedalliaClientError as exc:
             raise UserException(f"Could not load Medallia fields: {exc}") from None
-        nodes = ((data.get("fields") or {}).get("nodes")) or []
         elements: list[SelectElement] = []
-        for node in nodes:
+        for node in catalog.extract(data):
             field_id = node.get("id")
             if not field_id:
                 continue
