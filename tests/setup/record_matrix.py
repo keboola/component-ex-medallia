@@ -186,6 +186,24 @@ CASES = {
         max_pages=2,
         seed=None,
     ),
+    "20_validateQuery_preview": dict(
+        description="validateQuery — cost pre-flight then a small live row preview (Keboola standard).",
+        config=cfg(
+            "validateQuery",
+            mode="raw",
+            output_table="raw_feedback",
+            page_size=5,
+            raw_query=(
+                "query ($first: Int!, $after: ID) { "
+                "feedback(first: $first, after: $after) { "
+                "nodes { id " + CUSTOMER_ID + ': fieldData(fieldId: "' + CUSTOMER_ID + '") { values } } '
+                "pageInfo { hasNextPage endCursor } } }"
+            ),
+        ),
+        secrets="real",
+        max_pages=2,
+        seed=None,
+    ),
     "18_auth_401": dict(
         description="401: one deliberately-wrong #client_secret -> actionable UserException, exit 1.",
         config=cfg("testConnection"),
