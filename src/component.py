@@ -543,7 +543,7 @@ class Component(ComponentBase):
             return value
         try:
             return int(value)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):  # fmt: skip
             return value
 
     @staticmethod
