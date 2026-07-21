@@ -119,7 +119,10 @@ class RowConfiguration(BaseModel):
     fields: list[str] = Field(default_factory=list, description="Field IDs to extract; empty ⇒ all scalar fields.")
     load_type: LoadType = LoadType.incremental_load
     incremental_field: str = Field(default="", description="Date/int field ID driving the incremental watermark.")
-    initial_start: str = Field(default="", description="First-run lower bound (ISO date or epoch seconds).")
+    initial_start: str = Field(
+        default="",
+        description="First-run lower bound: ISO date, epoch seconds, or a relative expression (e.g. '5 days ago').",
+    )
     filters: str = Field(default="", description="Optional Medallia filter tree as a JSON string.")
     # Raw mode.
     raw_query: str = Field(default="", description="Raw GraphQL query (raw mode).")

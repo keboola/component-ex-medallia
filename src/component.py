@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import dateparser
 from keboola.component.base import ComponentBase, sync_action
 from keboola.component.dao import BaseType, ColumnDefinition, TableDefinition
 from keboola.component.exceptions import UserException
@@ -537,9 +538,34 @@ class Component(ComponentBase):
             return self._coerce_seed(stored, is_int)
         if row.initial_start.strip():
             logging.info("First run: seeding lower bound from initial_start.")
-            return self._coerce_seed(row.initial_start.strip(), is_int)
+            return self._resolve_initial_start(row.initial_start, is_int)
         logging.info("No stored watermark and no initial_start; loading full history.")
         return None
+
+    @staticmethod
+    def _resolve_initial_start(value: str, is_int: bool) -> int | str:
+        """Resolve a first-run ``initial_start`` to the watermark field's bound format.
+
+        Accepts an absolute value — epoch seconds (e.g. ``1780272000``) or an ISO date
+        (e.g. ``2026-01-01``) — OR a relative expression (e.g. ``yesterday``, ``5 days ago``,
+        ``last monday``). Returns epoch seconds (``int``) for an epoch field, or a date-only
+        ``YYYY-MM-DD`` string for a datetime field (Medallia's date filter is day-granular).
+        """
+        text = value.strip()
+        if text.isdigit():  # epoch-seconds passthrough (avoid dateparser mis-reading a bare int)
+            return int(text) if is_int else text
+        parsed = dateparser.parse(text, settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False})
+        if parsed is None:
+            raise UserException(
+                f"Could not parse 'Initial Start' value {text!r}. Use an ISO date "
+                "(e.g. 2026-01-01), epoch seconds, or a relative expression like "
+                "'yesterday' or '5 days ago'."
+            )
+        # Floor to the start of the resolved day: a first-run lower bound is day-granular
+        # (Medallia's date filter is), and it keeps relative values deterministic.
+        if is_int:
+            return int(datetime(parsed.year, parsed.month, parsed.day, tzinfo=UTC).timestamp())
+        return parsed.strftime("%Y-%m-%d")
 
     @staticmethod
     def _coerce_seed(value: int | str, is_int: bool) -> int | str:

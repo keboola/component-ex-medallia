@@ -143,7 +143,7 @@
           "load_type": "incremental_load",
           "mode": "structured"
         },
-        "tooltip": "Applied only on the first run (empty state). Use an ISO date (e.g. 2026-01-01) for a date field, or epoch seconds for a numeric timestamp field. Leave empty to load full history first."
+        "tooltip": "Applied only on the first run (empty state). Accepts an absolute value — an ISO date (e.g. 2026-01-01) for a date field, or epoch seconds for a numeric timestamp field — OR a relative expression such as 'yesterday', '5 days ago', or 'last monday'. Leave empty to load full history first."
       },
       "propertyOrder": 90
     },
@@ -159,7 +159,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "A raw Medallia filter object (and/or/not, fieldIds with in/gt/gte/lt/lte/isNull/eq) as JSON. AND-joined with the incremental watermark filter. Leave empty for no extra filtering."
+        "tooltip": "A Medallia filter tree (JSON), AND-joined with the incremental watermark. A leaf clause is {\"fieldIds\": [\"<field id>\"], \"<op>\": <value>} where <op> is one of eq, in, gt, gte, lt, lte, isNull; combine leaves with and / or / not. Example: {\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}. Field ids come from the Load Fields picker. Full grammar: Medallia Query API 'Filter and sort' docs (see the component's Documentation link). Leave empty for no extra filtering."
       },
       "propertyOrder": 100
     },

@@ -882,6 +882,34 @@ class TestCoerceSeed:
         assert Component._coerce_seed(42, is_int=True) == 42
 
 
+class TestResolveInitialStart:
+    def test_epoch_seconds_passthrough_int_field(self):
+        assert Component._resolve_initial_start("1780272000", is_int=True) == 1780272000
+
+    def test_epoch_seconds_passthrough_string_field(self):
+        assert Component._resolve_initial_start("1780272000", is_int=False) == "1780272000"
+
+    def test_iso_date_datetime_field_returns_date_only(self):
+        assert Component._resolve_initial_start("2026-01-01", is_int=False) == "2026-01-01"
+
+    def test_iso_date_epoch_field_returns_epoch_seconds(self):
+        assert Component._resolve_initial_start("2026-01-01", is_int=True) == 1767225600
+
+    def test_relative_datetime_field(self):
+        with freeze_time("2026-07-16T12:00:00+00:00"):
+            assert Component._resolve_initial_start("yesterday", is_int=False) == "2026-07-15"
+            assert Component._resolve_initial_start("5 days ago", is_int=False) == "2026-07-11"
+
+    def test_relative_epoch_field(self):
+        with freeze_time("2026-07-16T12:00:00+00:00"):
+            # 2026-07-11 00:00:00Z
+            assert Component._resolve_initial_start("5 days ago", is_int=True) == 1783728000
+
+    def test_unparseable_raises_user_exception(self):
+        with pytest.raises(UserException, match="Could not parse 'Initial Start'"):
+            Component._resolve_initial_start("not a real date", is_int=False)
+
+
 class TestUpperBound:
     def test_int_upper_bound_is_epoch_seconds(self):
         with freeze_time("2026-07-16T12:00:00+00:00"):
