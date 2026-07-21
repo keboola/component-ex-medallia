@@ -319,6 +319,11 @@ except ImportError:  # pragma: no cover - production image has no dev dependenci
 # state.json key for the single-scalar incremental watermark (spec §8).
 STATE_LAST_INCREMENTAL_VALUE = "last_incremental_value"
 
+# validateQuery row-preview limits (kept small — one gentle live page shown in the config UI).
+_PREVIEW_ROWS = 5
+_PREVIEW_COLUMNS = 8
+_PREVIEW_CELL_WIDTH = 40
+
 
 @dataclass(frozen=True)
 class _MetadataCatalog:
@@ -819,7 +824,42 @@ class Component(ComponentBase):
             client.run_metadata_query(query, compute_cost_only=True, variables={"first": row.page_size, "after": None})
         except (MedalliaClientError, UserException) as exc:
             return ValidationResult(f"Query validation failed: {exc}", MessageType.ERROR)
-        return ValidationResult("Raw query compiled successfully and passed the cost pre-flight.")
+        # Fetch a tiny sample (one small page) so the user can preview real rows before running.
+        preview_n = min(row.page_size, _PREVIEW_ROWS)
+        try:
+            data = client.run_metadata_query(query, variables={"first": preview_n, "after": None})
+            nodes = self._raw_connection(data).get("nodes", [])[:preview_n]
+            rows = [flatten_node(node) for node in nodes]
+        except (MedalliaClientError, UserException) as exc:
+            return ValidationResult(
+                f"Raw query is valid (cost pre-flight passed), but the row preview could not be fetched: {exc}",
+                MessageType.WARNING,
+            )
+        if not rows:
+            return ValidationResult("Raw query is valid; it returned no rows for the current filter/window.")
+        return ValidationResult(
+            f"Raw query is valid. Preview of the first {len(rows)} row(s):\n\n{self._format_preview(rows)}"
+        )
+
+    @staticmethod
+    def _format_preview(rows: list[dict[str, Any]]) -> str:
+        """Render up to _PREVIEW_ROWS flattened rows as a compact Markdown table for the UI."""
+        columns: list[str] = []
+        for row in rows:
+            for key in row:
+                if key not in columns:
+                    columns.append(key)
+        columns = columns[:_PREVIEW_COLUMNS]
+
+        def cell(value: object) -> str:
+            text = "" if value is None else str(value)
+            text = text.replace("|", "\\|").replace("\n", " ")
+            return text if len(text) <= _PREVIEW_CELL_WIDTH else text[:_PREVIEW_CELL_WIDTH] + "…"
+
+        header = "| " + " | ".join(columns) + " |"
+        divider = "| " + " | ".join("---" for _ in columns) + " |"
+        body = "\n".join("| " + " | ".join(cell(r.get(c)) for c in columns) + " |" for r in rows)
+        return "\n".join([header, divider, body])
 
     def _field_elements(self, date_only: bool) -> list[SelectElement]:
         row = self._get_row()

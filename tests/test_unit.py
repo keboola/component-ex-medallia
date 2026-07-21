@@ -1442,15 +1442,33 @@ class TestValidateQuery:
         monkeypatch.setattr(comp, "_build_client", lambda config: client)
         return comp
 
-    def test_accepts_valid_single_connection_query(self, monkeypatch):
-        client = _StubMetadataClient({})  # compute_cost_only pre-flight returns no errors
+    _PREVIEW_RESPONSE = {
+        "feedback": {
+            "nodes": [{"id": "R1", "score": "9"}, {"id": "R2", "score": "3"}],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
+    }
+
+    def test_accepts_valid_query_and_returns_row_preview(self, monkeypatch):
+        client = _StubMetadataClient(self._PREVIEW_RESPONSE)  # cost pre-flight ok + rows to preview
         comp = self._component(monkeypatch, self.VALID_QUERY, client)
         result = Component.validate_query.__wrapped__(comp)
         assert result.type != MessageType.ERROR
-        assert "compiled successfully" in result.message
-        # priced as a cost-only pre-flight with the paging variables (does not consume quota)
+        assert "Preview" in result.message and "R1" in result.message and "R2" in result.message
+        # first call = cost-only pre-flight with the paging variables (does not consume quota)
         assert client.queries[0]["compute_cost_only"] is True
         assert client.queries[0]["variables"] == {"first": 50, "after": None}
+        # second call = the row preview, NOT cost-only, capped at _PREVIEW_ROWS
+        assert client.queries[1].get("compute_cost_only") in (False, None)
+        assert client.queries[1]["variables"] == {"first": 5, "after": None}
+
+    def test_valid_query_without_preview_rows_is_not_an_error(self, monkeypatch):
+        # cost pre-flight ok, but the response carries no Relay connection to preview -> WARNING, not ERROR
+        client = _StubMetadataClient({})
+        comp = self._component(monkeypatch, self.VALID_QUERY, client)
+        result = Component.validate_query.__wrapped__(comp)
+        assert result.type == MessageType.WARNING
+        assert "preview could not be fetched" in result.message
 
     def test_rejects_missing_pageinfo_before_any_call(self, monkeypatch):
         client = _StubMetadataClient({})

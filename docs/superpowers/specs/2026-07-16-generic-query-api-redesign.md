@@ -325,6 +325,11 @@ literal date). Documented in the `raw_query` tooltip.
   and `pageInfo` — else "Raw query must declare $first/$after and select pageInfo{hasNextPage endCursor}".
 - `compute_cost_only` pre-flight (in `validateQuery`, and once at run start): compile + cost check;
   GraphQL compile errors → the GraphQL error message; cost over the 3M ceiling → a cost message.
+- **Row preview (`validateQuery`, Keboola standard):** after the pre-flight passes, the button fetches
+  ONE small page (`first = min(page_size, 5)`) and renders the flattened rows as a Markdown table in the
+  `ValidationResult` (capped columns/cell width). If the pre-flight passes but the preview can't be
+  fetched (no connection / transient error), it returns a WARNING ("valid, preview unavailable"), never
+  an ERROR. Button label: "Validate & Preview Query".
 - Response validation: `data` must have exactly one key; its value must contain a list `nodes` and a
   `pageInfo`. Zero connections → "Raw query returned no Relay connection"; more than one → "Raw query
   must return exactly one connection (found N: …)"; missing `pageInfo` → "…must select pageInfo…".

@@ -89,7 +89,7 @@
       "format": "sync-action",
       "options": {
         "async": {
-          "label": "Validate Query",
+          "label": "Validate & Preview Query",
           "action": "validateQuery"
         },
         "dependencies": {
