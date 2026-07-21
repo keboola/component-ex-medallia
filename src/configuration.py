@@ -27,6 +27,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_fie
 # field ID / object name.
 _GRAPHQL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Output table name pattern. The value becomes ``<output_table>.csv`` under ``data/out/tables``,
+# so it must be a bare filesystem-safe slug — letters, digits, underscores, hyphens — with NO
+# path separator or other special character, so a crafted name cannot escape the output dir.
+_SAFE_TABLE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+
 # Medallia API hard ceiling for the ``first`` page-size argument (reference repo:
 # MAX_RECORDS_PER_REQUEST = 1000). The configured value is clamped to this.
 MAX_PAGE_SIZE = 1000
@@ -118,8 +123,12 @@ class RowConfiguration(BaseModel):
     filters: str = Field(default="", description="Optional Medallia filter tree as a JSON string.")
     # Raw mode.
     raw_query: str = Field(default="", description="Raw GraphQL query (raw mode).")
-    output_table: str = Field(default="", description="Output table name (raw mode).")
     # Both modes.
+    output_table: str = Field(
+        default="",
+        description="Optional output table name; defaults to the data object name (structured mode). "
+        "Required in raw mode, where there is no object name to derive it from.",
+    )
     page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1)
 
     def __init__(self, **data):
@@ -140,6 +149,19 @@ class RowConfiguration(BaseModel):
     @classmethod
     def _validate_incremental_field(cls, value: str) -> str:
         return _validate_graphql_name(value, "incremental_field") if value else value
+
+    @field_validator("output_table")
+    @classmethod
+    def _validate_output_table(cls, value: str) -> str:
+        # Optional in both modes; empty is allowed (a half-filled async form, and structured mode
+        # derives the name from the object). Raw-mode presence is checked in run(), not here.
+        name = value.strip()
+        if name and not _SAFE_TABLE_NAME.match(name):
+            raise UserException(
+                f"output_table '{value}' is not a valid table name; use letters, digits, underscores "
+                "or hyphens only (no path separators)."
+            )
+        return value
 
     @field_validator("fields")
     @classmethod

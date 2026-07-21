@@ -77,13 +77,10 @@
     },
     "output_table": {
       "type": "string",
-      "title": "Output Table",
-      "description": "Name of the output table (raw mode).",
+      "title": "Storage Table Name",
+      "description": "Optional. Defaults to the data object name.",
       "options": {
-        "dependencies": {
-          "mode": "raw"
-        },
-        "tooltip": "Written as <output_table>.csv. Required in raw mode because there is no object name to derive it from."
+        "tooltip": "Optional. Name of the output table; defaults to the data object name. Set a distinct name to extract the same object multiple ways in one configuration."
       },
       "propertyOrder": 50
     },

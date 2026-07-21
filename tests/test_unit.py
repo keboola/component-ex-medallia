@@ -678,6 +678,19 @@ class TestRowConfiguration:
         with pytest.raises(UserException):
             RowConfiguration(fields=["ok_field", bad_name])
 
+    def test_output_table_defaults_empty_and_is_optional(self):
+        # Optional per-row field, valid in BOTH modes, empty by default (must not break rows).
+        assert RowConfiguration().output_table == ""
+
+    @pytest.mark.parametrize("name", ["feedback_variant_a", "my-table", "table1", "customers"])
+    def test_valid_output_table_accepted(self, name):
+        assert RowConfiguration(output_table=name).output_table == name
+
+    @pytest.mark.parametrize("bad_name", ["a/b", "..\\evil", "with space", "tab\tname", "semi;colon"])
+    def test_invalid_output_table_raises_user_exception(self, bad_name):
+        with pytest.raises(UserException):
+            RowConfiguration(output_table=bad_name)
+
 
 class TestParsedFilters:
     def test_valid_json_object_returns_dict(self):
@@ -1136,6 +1149,30 @@ class TestRawModeValidation:
         data = {"feedback": {"nodes": [{"id": "1"}]}}
         with pytest.raises(UserException, match="must select pageInfo"):
             Component._raw_connection(data)
+
+
+# ==================================================================================================
+# 12b. output-table name resolution (per-row override, both modes)
+# ==================================================================================================
+
+
+class TestOutputTableName:
+    def test_explicit_override_wins_over_default(self):
+        # Structured mode: an override lets the same object land in a distinct table.
+        assert Component._output_table_name("feedback_variant_a", "feedback") == "feedback_variant_a.csv"
+
+    def test_falls_back_to_default_when_empty(self):
+        assert Component._output_table_name("", "feedback") == "feedback.csv"
+
+    def test_falls_back_to_default_when_whitespace_only(self):
+        assert Component._output_table_name("   ", "customers") == "customers.csv"
+
+    def test_override_is_stripped(self):
+        assert Component._output_table_name("  raw_out  ", "") == "raw_out.csv"
+
+    def test_raw_style_uses_explicit_with_empty_default(self):
+        # Raw mode passes default="" — presence is enforced separately in _run_raw.
+        assert Component._output_table_name("raw_out", "") == "raw_out.csv"
 
 
 # ==================================================================================================

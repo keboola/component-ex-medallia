@@ -424,6 +424,51 @@ def test_multi_page_pagination_via_hasnextpage(tmp_path, monkeypatch):
         assert schema["programName"]["data_type"]["base"]["type"] == "STRING"
 
 
+def test_structured_output_table_override_writes_to_that_name(tmp_path, monkeypatch):
+    """Structured row with an output_table override writes to <output_table>.csv, not <object>.csv.
+
+    This is the collision fix: two structured rows on the same object can now land in distinct
+    tables instead of both targeting feedback.csv (tableAlreadyExists).
+    """
+    pages = {"feedback": [_page([{"id": "F1", "a_customerid": {"values": ["C1"]}}])]}
+    params = {
+        "mode": "structured",
+        "data_object": "feedback",
+        "fields": ["a_customerid"],
+        "load_type": "full_load",
+        "output_table": "feedback_variant_a",
+        "page_size": 5,
+    }
+    data_dir = _write_datadir(tmp_path, params)
+    _run(monkeypatch, data_dir, StubSession(pages))
+
+    # written to the override name, and NOT to the object-derived default
+    fieldnames, rows = _read_csv(data_dir, "feedback_variant_a.csv")
+    assert [r["id"] for r in rows] == ["F1"]
+    assert not (data_dir / "out" / "tables" / "feedback.csv").exists()
+    # manifest/PK logic unchanged for the override table
+    assert _manifest_pk(_read_manifest(data_dir, "feedback_variant_a.csv")) == ["id"]
+
+
+def test_structured_without_output_table_defaults_to_object_name(tmp_path, monkeypatch):
+    """Back-compat: with no output_table the table name still derives from the object (<object>.csv)."""
+    pages = {"programs": [_page([{"id": "P1", "programName": "Alpha", "recordCount": 10}])]}
+    params = {
+        "mode": "structured",
+        "data_object": "programs",
+        "fields": [],
+        "load_type": "full_load",
+        # no output_table set
+        "page_size": 5,
+    }
+    data_dir = _write_datadir(tmp_path, params)
+    _run(monkeypatch, data_dir, StubSession(pages))
+
+    _, rows = _read_csv(data_dir, "programs.csv")
+    assert [r["id"] for r in rows] == ["P1"]
+    assert _manifest_pk(_read_manifest(data_dir, "programs.csv")) == ["id"]
+
+
 # --------------------------------------------------------------------------------------------
 # Tests — raw mode
 # --------------------------------------------------------------------------------------------

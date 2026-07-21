@@ -46,8 +46,11 @@ instance — they create the referenceable schema. An empty instance has no quer
 ## 2. Keboola mapping
 
 - **Connection (object) → output table.** Each extractable paginated connection maps to one output
-  table named `<data_object>.csv` (`feedback.csv`, `customers.csv`, `programs.csv`, …). In raw mode
-  the table name is user-supplied (`output_table`, §5) because there is no object name to derive from.
+  table named `<data_object>.csv` (`feedback.csv`, `customers.csv`, `programs.csv`, …) by default. An
+  **optional per-row `output_table` override** (§5) renames the table in BOTH modes: it defaults to the
+  object name in structured mode, and is required in raw mode (no object name to derive from). The
+  override is what lets several rows extract the *same* object different ways in one configuration
+  without colliding on `<object>.csv` (`tableAlreadyExists`).
 - **Config rows, one row per object** (Tier A convention). One row = one object (or one raw query) =
   one output table = its own `state.json`. Connection/auth is **config (root) level**; object choice,
   field selection, incremental settings, filters, mode, and raw query are **row level**. The component
@@ -153,7 +156,7 @@ enumerated with its widget, dependencies, and feeding sync action. The actual `c
 | 6 | `initial_start` | string text | `mode = structured` **and** `load_type = incremental_load` | — | first-run lower bound; interpreted by the field's detected type (ISO date `2026-01-01`, or epoch seconds). Empty ⇒ full history on first run |
 | 7 | `filters` | string, `format: "editor"`, `options.editor.mode: "application/json"` | `mode = structured` | — | **real editable JSON** filter tree; validated by the component (§6). Empty ⇒ no extra filter |
 | 8 | `raw_query` | string, `format: "editor"` (GraphQL/text) | `mode = raw` | — | see the raw contract §6.4 |
-| 9 | `output_table` | string text | `mode = raw` | — | required in raw mode (no object name); output written to `<output_table>.csv` |
+| 9 | `output_table` | string text ("Storage Table Name") | — (both modes) | — | **optional** per-row override; output written to `<output_table>.csv`. Structured mode defaults to `<data_object>.csv`; **required** in raw mode (no object name to derive from). Validated as a filesystem-safe slug (`[A-Za-z0-9_-]+`, no path separators). Set a distinct name to extract the same object multiple ways in one configuration |
 | 10 | `validate_query` | `button`, `format: sync-action` → `validateQuery` | `mode = raw` | `validateQuery` | inline pre-flight: compile + single-connection + cost check |
 | 11 | `page_size` | integer, default 100, min 1, max 1000 | — (both modes) | — | the `first` variable; clamped to 1000 |
 

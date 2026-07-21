@@ -417,7 +417,8 @@ class Component(ComponentBase):
         columns = builder.selection_columns()
         fieldnames = [*columns, "_row_hash"] if not shape.has_id else list(columns)
 
-        table = self._build_table_definition(f"{row.data_object}.csv", fieldnames, shape, field_meta, do_incremental)
+        table_name = self._output_table_name(row.output_table, row.data_object)
+        table = self._build_table_definition(table_name, fieldnames, shape, field_meta, do_incremental)
         nodes = client.fetch_object(row.data_object, query, row.page_size)
         max_watermark = self._write_rows(
             table.full_path, fieldnames, nodes, shape.has_id, row.incremental_field, is_int, lower_bound
@@ -437,7 +438,7 @@ class Component(ComponentBase):
             row.raw_query, compute_cost_only=True, variables={"first": row.page_size, "after": None}
         )
 
-        table_name = f"{row.output_table.strip()}.csv"
+        table_name = self._output_table_name(row.output_table, "")
         nodes = client.paginate(row.raw_query, row.page_size, self._raw_connection)
         self._write_raw_table(table_name, nodes)
 
@@ -610,6 +611,18 @@ class Component(ComponentBase):
         return metadata
 
     # -- output ------------------------------------------------------------------------
+
+    @staticmethod
+    def _output_table_name(explicit: str, default: str) -> str:
+        """Resolve the output CSV filename: per-row ``output_table`` override, else the default.
+
+        The override lets several rows extract the SAME object into distinct tables; without it
+        every structured row on one object would collide on ``<object>.csv`` with
+        ``tableAlreadyExists``. Structured mode falls back to ``<data_object>.csv``; raw mode has
+        no object to derive from, so its ``output_table`` presence is enforced in ``_run_raw``.
+        """
+        base = explicit.strip() or default
+        return f"{base}.csv"
 
     def _build_table_definition(
         self,
