@@ -172,7 +172,7 @@ class StubSession:
             return _StubResponse({"data": {"__typename": "Query"}})
         if "customerSchema" in query:
             return _StubResponse({"data": CUSTOMER_SCHEMA})
-        if "fields(first: 1000)" in query:
+        if "fields(first: $first" in query:  # paginated global field catalogue (single page in stubs)
             return _StubResponse({"data": FIELD_CATALOG})
         # data query — find which registered object appears as a connection field
         for obj, pages in self._data_pages.items():

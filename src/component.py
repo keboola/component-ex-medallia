@@ -326,22 +326,55 @@ _PREVIEW_COLUMNS = 8
 _PREVIEW_CELL_WIDTH = 40
 
 
+# Field-catalogue paging (spec §6.3). Medallia field catalogues can exceed a single page;
+# fetch the WHOLE catalogue via ``pageInfo`` cursoring rather than a fixed ``first: N`` cap
+# (a bug that silently dropped later fields, e.g. k_/q_/u_* on large instances).
+_METADATA_PAGE_SIZE = 500
+_MAX_METADATA_PAGES = 400  # ceiling guard (≤200k fields); real catalogues are far smaller
+# The Field-type selection includes ``usedOnPrograms`` so the picker can hide fields not used on
+# any program (they would only ever produce empty columns). Only the ``fields`` catalogue (the
+# Field type) exposes it; the other catalogues use the base selection.
+_FIELD_SELECTION = "id name dataType sortable multivalued usedOnPrograms"
+_BASE_SELECTION = "id name dataType sortable multivalued"
+
+
 @dataclass(frozen=True)
 class _MetadataCatalog:
     """A field-definition metadata source (spec §6.3).
 
-    ``query`` fetches the catalogue; ``container`` is the key path from the response ``data`` to
-    the list of ``{id, name, dataType, sortable, multivalued}`` field definitions.
+    ``node`` is the root query field. A ``connection`` catalogue (``fields`` / ``eventSchemas`` /
+    ``programRecordSchemas``) is a Relay connection that is paged in full via ``pageInfo``; a
+    non-connection catalogue (``customerSchema``) is a singleton whose definitions sit under a
+    ``fields`` list. ``fetch`` returns every ``{id, name, dataType, sortable, multivalued, …}``
+    definition, paging as needed.
     """
 
-    query: str
-    container: tuple[str, ...]
+    node: str
+    connection: bool
+    selection: str = _BASE_SELECTION
 
-    def extract(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        node: Any = data
-        for key in self.container:
-            node = node.get(key) if isinstance(node, dict) else None
-        return [item for item in (node or []) if isinstance(item, dict)]
+    def fetch(self, client: MedalliaClient) -> list[dict[str, Any]]:
+        if not self.connection:  # singleton, e.g. customerSchema { fields { … } }
+            data = client.run_metadata_query(f"query {{ {self.node} {{ fields {{ {self.selection} }} }} }}")
+            root = data.get(self.node)
+            container = root.get("fields") if isinstance(root, dict) else None
+            return [item for item in (container or []) if isinstance(item, dict)]
+        query = (
+            f"query ($first: Int!, $after: String) {{ {self.node}(first: $first, after: $after) "
+            f"{{ nodes {{ {self.selection} }} pageInfo {{ hasNextPage endCursor }} }} }}"
+        )
+        out: list[dict[str, Any]] = []
+        after: str | None = None
+        for _ in range(_MAX_METADATA_PAGES):
+            data = client.run_metadata_query(query, variables={"first": _METADATA_PAGE_SIZE, "after": after})
+            root = data.get(self.node)
+            conn: dict[str, Any] = root if isinstance(root, dict) else {}
+            out.extend(item for item in (conn.get("nodes") or []) if isinstance(item, dict))
+            page = conn.get("pageInfo") or {}
+            if not page.get("hasNextPage"):
+                break
+            after = page.get("endCursor")
+        return out
 
 
 # Field-metadata catalogues keyed by metadata-node name (spec §6.3). All expose the same
@@ -351,22 +384,10 @@ class _MetadataCatalog:
 # ``customerSchema`` (ContactSchema) is the singleton that types the ``customers`` object
 # (shape b) and wraps its definitions in a ``fields`` list.
 _METADATA_CATALOGS: dict[str, _MetadataCatalog] = {
-    "fields": _MetadataCatalog(
-        "query { fields(first: 1000) { nodes { id name dataType sortable multivalued } } }",
-        ("fields", "nodes"),
-    ),
-    "customerSchema": _MetadataCatalog(
-        "query { customerSchema { fields { id name dataType sortable multivalued } } }",
-        ("customerSchema", "fields"),
-    ),
-    "eventSchemas": _MetadataCatalog(
-        "query { eventSchemas(first: 1000) { nodes { id name dataType sortable multivalued } } }",
-        ("eventSchemas", "nodes"),
-    ),
-    "programRecordSchemas": _MetadataCatalog(
-        "query { programRecordSchemas(first: 1000) { nodes { id name dataType sortable multivalued } } }",
-        ("programRecordSchemas", "nodes"),
-    ),
+    "fields": _MetadataCatalog("fields", connection=True, selection=_FIELD_SELECTION),
+    "customerSchema": _MetadataCatalog("customerSchema", connection=False),
+    "eventSchemas": _MetadataCatalog("eventSchemas", connection=True),
+    "programRecordSchemas": _MetadataCatalog("programRecordSchemas", connection=True),
 }
 
 # Objects whose field metadata comes from a dedicated catalogue instead of the shape-based
@@ -631,11 +652,11 @@ class Component(ComponentBase):
             return metadata
         catalog = _METADATA_CATALOGS[node]
         try:
-            data = client.run_metadata_query(catalog.query)
+            definitions = catalog.fetch(client)
         except MedalliaClientError as exc:
             logging.warning("Could not load field metadata for '%s' (%s); columns default to STRING.", shape.name, exc)
             return metadata
-        for definition in catalog.extract(data):
+        for definition in definitions:  # typing uses the FULL catalogue (not usage-filtered)
             field_id = definition.get("id")
             if field_id:
                 metadata[field_id] = definition
@@ -902,11 +923,17 @@ class Component(ComponentBase):
         self, client: MedalliaClient, catalog: _MetadataCatalog, date_only: bool
     ) -> list[SelectElement]:
         try:
-            data = client.run_metadata_query(catalog.query)
+            definitions = catalog.fetch(client)
         except MedalliaClientError as exc:
             raise UserException(f"Could not load Medallia fields: {exc}") from None
+        # Scope the picker to fields actually used on a program — the rest only ever produce
+        # empty columns. Only applied when usage is reported (the ``fields`` catalogue); if no
+        # field carries ``usedOnPrograms`` (other catalogues / instances that don't report it),
+        # keep them all so the picker never goes empty.
+        used = [d for d in definitions if d.get("usedOnPrograms")]
+        candidates = used or definitions
         elements: list[SelectElement] = []
-        for node in catalog.extract(data):
+        for node in candidates:
             field_id = node.get("id")
             if not field_id:
                 continue

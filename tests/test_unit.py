@@ -38,7 +38,7 @@ from client.medallia_client import (
     resolve_object_shape,
     row_hash,
 )
-from component import Component
+from component import _METADATA_CATALOGS, Component
 from configuration import MAX_PAGE_SIZE, Configuration, RowConfiguration
 
 # ==================================================================================================
@@ -1402,6 +1402,92 @@ class TestListFieldsCustomers:
         elements = Component.list_fields.__wrapped__(comp)
         assert {e.value for e in elements} == {"c_email", "c_created", "c_lastseen", "c_loyalty", "c_nps", "c_name"}
         assert {e.value: e.label for e in elements}["c_created"] == "Created Date"
+
+
+class _PagingMetadataClient:
+    """run_metadata_query double that returns a queued page per call (for pagination tests)."""
+
+    def __init__(self, pages: list[dict]):
+        self._pages = pages
+        self.calls: list[dict] = []
+
+    def run_metadata_query(self, query: str, **kwargs) -> dict:
+        self.calls.append({"query": query, **kwargs})
+        return self._pages[min(len(self.calls) - 1, len(self._pages) - 1)]
+
+
+def _fld(fid: str, used: list | None = None, data_type: str = "STRING") -> dict:
+    d = {"id": fid, "name": fid.upper(), "dataType": data_type, "sortable": False, "multivalued": False}
+    if used is not None:
+        d["usedOnPrograms"] = used
+    return d
+
+
+class TestFieldCatalogPagination:
+    """#1 — the field catalogue is paged in FULL via pageInfo (no fixed first:N cap)."""
+
+    def test_fetch_follows_pageinfo_across_pages(self):
+        catalog = _METADATA_CATALOGS["fields"]
+        client = _PagingMetadataClient(
+            [
+                {"fields": {"nodes": [_fld("a_1"), _fld("e_2")], "pageInfo": {"hasNextPage": True, "endCursor": "C1"}}},
+                {"fields": {"nodes": [_fld("k_3"), _fld("u_4")], "pageInfo": {"hasNextPage": False}}},
+            ]
+        )
+        defs = catalog.fetch(client)  # ty: ignore[invalid-argument-type]
+        assert [d["id"] for d in defs] == ["a_1", "e_2", "k_3", "u_4"]  # later k_/u_ fields no longer dropped
+        assert len(client.calls) == 2
+        assert client.calls[1]["variables"]["after"] == "C1"  # cursor threaded to the next page
+
+    def test_single_page_when_no_next(self):
+        catalog = _METADATA_CATALOGS["fields"]
+        client = _PagingMetadataClient([{"fields": {"nodes": [_fld("a_1")], "pageInfo": {"hasNextPage": False}}}])
+        assert [d["id"] for d in catalog.fetch(client)] == ["a_1"]  # ty: ignore[invalid-argument-type]
+        assert len(client.calls) == 1
+
+
+class TestFieldPickerUsageScope:
+    """#3 — the picker hides fields not used on any program (they'd be empty columns)."""
+
+    def _feedback_component(self, monkeypatch, client):
+        row = RowConfiguration(data_object="feedback", mode="structured")
+        shape = ObjectShape("feedback", SHAPE_FIELDDATA, True, True, True)
+        return _bare_component(monkeypatch, row, client, shape)
+
+    def test_only_used_fields_offered(self, monkeypatch):
+        client = _PagingMetadataClient(
+            [
+                {
+                    "fields": {
+                        "nodes": [_fld("a_used", used=["p1"]), _fld("k_unused", used=[]), _fld("e_used", used=["p2"])],
+                        "pageInfo": {"hasNextPage": False},
+                    }
+                }
+            ]
+        )
+        comp = self._feedback_component(monkeypatch, client)
+        elements = Component.list_fields.__wrapped__(comp)
+        assert {e.value for e in elements} == {"a_used", "e_used"}  # k_unused (no programs) hidden
+
+    def test_fallback_shows_all_when_usage_not_reported(self, monkeypatch):
+        # No field carries usedOnPrograms → keep them all (never render an empty picker).
+        client = _PagingMetadataClient(
+            [{"fields": {"nodes": [_fld("a_1"), _fld("e_2")], "pageInfo": {"hasNextPage": False}}}]
+        )
+        comp = self._feedback_component(monkeypatch, client)
+        elements = Component.list_fields.__wrapped__(comp)
+        assert {e.value for e in elements} == {"a_1", "e_2"}
+
+    def test_typing_metadata_keeps_unused_fields(self, monkeypatch):
+        # The usage filter is picker-only: _field_metadata (column typing) must keep every field,
+        # so a selected-but-"unused" field still types correctly.
+        client = _PagingMetadataClient(
+            [{"fields": {"nodes": [_fld("k_unused", used=[], data_type="DATE")], "pageInfo": {"hasNextPage": False}}}]
+        )
+        shape = ObjectShape("feedback", SHAPE_FIELDDATA, True, True, True)
+        comp = object.__new__(Component)
+        meta = comp._field_metadata(client, shape)
+        assert "k_unused" in meta and meta["k_unused"]["dataType"] == "DATE"
 
 
 # ==================================================================================================
