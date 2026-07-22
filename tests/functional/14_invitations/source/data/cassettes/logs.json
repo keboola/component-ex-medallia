@@ -17,7 +17,7 @@
     {
       "level": "INFO",
       "logger": "root",
-      "message": "First run: seeding lower bound from initial_start.",
+      "message": "Applying Start Date lower bound.",
       "timestamp": "2026-07-16T12:00:00.000Z"
     },
     {

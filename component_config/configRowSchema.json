@@ -101,22 +101,22 @@
     "load_type": {
       "type": "string",
       "title": "Load Type",
-      "description": "Incremental keeps a watermark and fetches only newer records.",
+      "description": "Write mode: Incremental upserts by primary key; Full Load overwrites the table.",
       "enum": ["incremental_load", "full_load"],
       "options": {
         "enum_titles": ["Incremental Load", "Full Load"],
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "Incremental load requires an incremental field and an object that supports filtering; otherwise the component logs a warning and loads the full object."
+        "tooltip": "How the table is written: Incremental Load keeps a watermark and upserts rows by primary key (adds/updates); Full Load overwrites the whole table each run. Use the Date Field + Start Date to bound how far back either load reaches — this is NOT the same as load type."
       },
       "default": "incremental_load",
       "propertyOrder": 70
     },
     "incremental_field": {
       "type": "string",
-      "title": "Incremental Field",
-      "description": "Date field driving the incremental watermark.",
+      "title": "Date Field",
+      "description": "Date field the Start Date filters on (and, for incremental, the watermark).",
       "format": "select",
       "enum": [],
       "options": {
@@ -127,23 +127,21 @@
           "cache": true
         },
         "dependencies": {
-          "load_type": "incremental_load",
           "mode": "structured"
         },
-        "tooltip": "Date/datetime field (or a sortable numeric timestamp) whose value is tracked as the watermark. The value format is auto-detected — no need to declare it."
+        "tooltip": "The date/datetime field (or sortable numeric timestamp) that the Start Date bounds the extraction on. Applies to both load types. For incremental loads it is also tracked as the watermark. The value format is auto-detected. Leave empty to load the whole object unbounded."
       },
       "propertyOrder": 80
     },
     "initial_start": {
       "type": "string",
-      "title": "Initial Start",
-      "description": "First-run lower bound; empty loads full history.",
+      "title": "Start Date",
+      "description": "Only fetch records with the Date Field on/after this; empty loads full history.",
       "options": {
         "dependencies": {
-          "load_type": "incremental_load",
           "mode": "structured"
         },
-        "tooltip": "Applied only on the first run (empty state). Accepts an absolute value — an ISO date (e.g. 2026-01-01) for a date field, or epoch seconds for a numeric timestamp field — OR a relative expression such as 'yesterday', '5 days ago', or 'last monday'. Leave empty to load full history first."
+        "tooltip": "Lower bound on the Date Field, applied to BOTH load types — Full Load overwrites the table from this point; Incremental seeds the first run and then resumes from the watermark. Accepts an ISO date (e.g. 2026-01-01), epoch seconds, or a relative expression such as 'yesterday', '5 days ago', or 'last monday'. Leave empty to load full history. (Requires a Date Field.)"
       },
       "propertyOrder": 90
     },

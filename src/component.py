@@ -423,10 +423,12 @@ class Component(ComponentBase):
             raise UserException("No data object selected. Choose a Medallia object (structured mode).")
         shape = self._resolve_object(client, row.data_object)
         field_meta = self._field_metadata(client, shape)
-        do_incremental, is_int = self._incremental_plan(row, shape, field_meta)
-
-        lower_bound = self._seed_lower_bound(row, is_int) if do_incremental else None
-        upper_bound = self._upper_bound(is_int) if do_incremental else None
+        is_int = self._incremental_is_int(shape, row.incremental_field, field_meta)
+        # The Start-Date window applies to BOTH load types (bounds what's fetched); the load type
+        # only decides the write mode. Incremental additionally persists + resumes a watermark.
+        windowed = self._date_window_supported(row, shape)
+        lower_bound = self._compute_lower_bound(row, is_int) if windowed else None
+        upper_bound = self._upper_bound(is_int) if windowed else None
 
         scalar_fields = list(shape.scalar_fields) if shape.shape in (SHAPE_DATA, SHAPE_SCALAR) else []
         builder = GenericQueryBuilder(
@@ -447,13 +449,15 @@ class Component(ComponentBase):
         fieldnames = [*columns, "_row_hash"] if not shape.has_id else list(columns)
 
         table_name = self._output_table_name(row.output_table, row.data_object)
-        table = self._build_table_definition(table_name, fieldnames, shape, field_meta, do_incremental)
+        # Write mode follows the load type: incremental → upsert per PK; full → overwrite.
+        table = self._build_table_definition(table_name, fieldnames, shape, field_meta, row.incremental)
         nodes = client.fetch_object(row.data_object, query, row.page_size)
         max_watermark = self._write_rows(
             table.full_path, fieldnames, nodes, shape.has_id, row.incremental_field, is_int, lower_bound
         )
         self.write_manifest(table)
-        self._save_incremental_state(row, max_watermark)
+        # Persist the watermark ONLY for incremental loads; a full load re-applies the Start Date.
+        self._save_incremental_state(row, max_watermark if row.incremental else None)
 
     def _run_raw(self, client: MedalliaClient, row: RowConfiguration) -> None:
         if not row.raw_query.strip():
@@ -523,18 +527,21 @@ class Component(ComponentBase):
 
     # -- incremental planning + state --------------------------------------------------
 
-    def _incremental_plan(self, row: RowConfiguration, shape: ObjectShape, field_meta: dict) -> tuple[bool, bool]:
-        """Decide whether the row loads incrementally, and whether the cursor is numeric."""
-        is_int = self._incremental_is_int(shape, row.incremental_field, field_meta)
-        if not row.incremental:
-            return False, is_int
+    @staticmethod
+    def _date_window_supported(row: RowConfiguration, shape: ObjectShape) -> bool:
+        """Whether a Start-Date window can be applied to this row (either load type).
+
+        Requires a Date Field AND an object that supports ``filter`` + ``orderBy``. Without a
+        Date Field the object is loaded unbounded (full history) regardless of load type.
+        """
         if not row.incremental_field:
-            logging.warning("%s: incremental load requested but no incremental field set; loading full.", shape.name)
-            return False, is_int
+            return False
         if not (shape.supports_filter and shape.supports_order):
-            logging.warning("%s has no incremental cursor (no filter/orderBy support); loading full.", shape.name)
-            return False, is_int
-        return True, is_int
+            logging.warning(
+                "%s: a Date Field is set but the object has no filter/orderBy support; loading unbounded.", shape.name
+            )
+            return False
+        return True
 
     @staticmethod
     def _incremental_is_int(shape: ObjectShape, field_id: str, field_meta: dict) -> bool:
@@ -547,22 +554,22 @@ class Component(ComponentBase):
             return str(data_type).upper() in {"INT", "INTEGER"}
         return shape.scalar_fields.get(field_id) == "Int"
 
-    def _seed_lower_bound(self, row: RowConfiguration, is_int: bool) -> int | str | None:
-        """Lower bound = stored watermark → first-run ``initial_start`` → none (full history).
+    def _compute_lower_bound(self, row: RowConfiguration, is_int: bool) -> int | str | None:
+        """Fetch lower bound. Incremental resumes from the stored watermark when present; otherwise
+        (a full load, or an incremental first run) the Start Date is used. None → no lower bound.
 
-        For an INT watermark the seed is coerced to ``int`` so the first ``advance_watermark``
-        call compares numerically. A string seed (e.g. ``initial_start``) would otherwise force
-        the lexicographic branch and can under-advance the watermark on the first run.
+        For an INT field the value is coerced to ``int`` so the first ``advance_watermark`` call
+        compares numerically rather than lexicographically.
         """
-        state = self.get_state_file() or {}
-        stored = state.get(STATE_LAST_INCREMENTAL_VALUE)
-        if stored is not None and str(stored) != "":
-            logging.info("Resuming from stored watermark (%s).", stored)
-            return self._coerce_seed(stored, is_int)
+        if row.incremental:
+            stored = (self.get_state_file() or {}).get(STATE_LAST_INCREMENTAL_VALUE)
+            if stored is not None and str(stored) != "":
+                logging.info("Resuming from stored watermark (%s).", stored)
+                return self._coerce_seed(stored, is_int)
         if row.initial_start.strip():
-            logging.info("First run: seeding lower bound from initial_start.")
+            logging.info("Applying Start Date lower bound.")
             return self._resolve_initial_start(row.initial_start, is_int)
-        logging.info("No stored watermark and no initial_start; loading full history.")
+        logging.info("No Start Date and no stored watermark; loading the object unbounded.")
         return None
 
     @staticmethod

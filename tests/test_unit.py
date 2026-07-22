@@ -910,6 +910,46 @@ class TestResolveInitialStart:
             Component._resolve_initial_start("not a real date", is_int=False)
 
 
+class TestDateWindowDecoupling:
+    """Start Date / Date Field apply to BOTH load types; load type only sets the write mode."""
+
+    def _row(self, **kw) -> RowConfiguration:
+        base = dict(data_object="feedback", mode="structured", incremental_field="e_creationdate")
+        base.update(kw)
+        return RowConfiguration(**base)
+
+    def test_window_supported_requires_field_and_filter_support(self):
+        shape_ok = ObjectShape("feedback", SHAPE_FIELDDATA, True, True, True)
+        assert Component._date_window_supported(self._row(), shape_ok) is True
+        assert Component._date_window_supported(self._row(incremental_field=""), shape_ok) is False
+        shape_no_filter = ObjectShape("x", SHAPE_SCALAR, True, False, False)
+        assert Component._date_window_supported(self._row(), shape_no_filter) is False
+
+    def test_full_load_uses_start_date_and_ignores_stored_watermark(self, monkeypatch):
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": "2099-01-01"})
+        row = self._row(load_type="full_load", initial_start="2026-01-01")
+        assert row.incremental is False
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"  # Start Date, not the watermark
+
+    def test_incremental_resume_prefers_stored_watermark_over_start_date(self, monkeypatch):
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": "2026-05-01"})
+        row = self._row(load_type="incremental_load", initial_start="2026-01-01")
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-05-01"
+
+    def test_incremental_first_run_seeds_from_start_date(self, monkeypatch):
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {})
+        row = self._row(load_type="incremental_load", initial_start="2026-01-01")
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
+
+    def test_no_start_date_no_watermark_is_unbounded(self, monkeypatch):
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {})
+        assert comp._compute_lower_bound(self._row(load_type="full_load"), is_int=False) is None
+
+
 class TestUpperBound:
     def test_int_upper_bound_is_epoch_seconds(self):
         with freeze_time("2026-07-16T12:00:00+00:00"):
