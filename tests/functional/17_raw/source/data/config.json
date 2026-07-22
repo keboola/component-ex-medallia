@@ -8,7 +8,7 @@
     "#client_secret": "DUMMY_CLIENT_SECRET",
     "mode": "raw",
     "output_table": "raw_feedback",
-    "page_size": 5,
+    "page_size": 25,
     "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
   }
 }

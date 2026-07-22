@@ -12,6 +12,6 @@
     ],
     "load_type": "incremental_load",
     "incremental_field": "a_initial_finish_timestamp",
-    "page_size": 5
+    "page_size": 25
   }
 }

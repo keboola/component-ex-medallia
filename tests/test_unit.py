@@ -39,7 +39,7 @@ from client.medallia_client import (
     row_hash,
 )
 from component import _METADATA_CATALOGS, Component
-from configuration import MAX_PAGE_SIZE, Configuration, RowConfiguration
+from configuration import MAX_PAGE_SIZE, MIN_PAGE_SIZE, Configuration, RowConfiguration
 
 # ==================================================================================================
 # Stubs — in-memory requests.Session / token-manager doubles (no network).
@@ -643,9 +643,13 @@ class TestRowConfiguration:
 
     def test_page_size_clamps_to_max_when_over(self):
         row = RowConfiguration(**self._merged_params(page_size=5000))
-        assert row.page_size == MAX_PAGE_SIZE
+        assert row.page_size == MAX_PAGE_SIZE == 500
 
-    def test_page_size_kept_when_under_max(self):
+    def test_page_size_clamps_to_min_when_under(self):
+        row = RowConfiguration(**self._merged_params(page_size=1))
+        assert row.page_size == MIN_PAGE_SIZE == 25
+
+    def test_page_size_kept_when_within_bounds(self):
         row = RowConfiguration(**self._merged_params(page_size=250))
         assert row.page_size == 250
 

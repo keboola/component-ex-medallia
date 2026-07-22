@@ -27,7 +27,7 @@ The HTTP-free failure cases (03-08) are NOT recorded here — they need no live 
 secrets; scaffold them with:  uv run python -m keboola.datadirtest scaffold \
     --definitions tests/setup/configs.failure.json --output tests/functional --component src/component.py
 
-Live-call etiquette (spec §10.3): page_size=5, a hard MEDALLIA_MAX_PAGES=2 cap, narrow
+Live-call etiquette (spec §10.3): page_size=25, a hard MEDALLIA_MAX_PAGES=2 cap, narrow
 windows, one deliberately-wrong call each for the 401/4xx cases. Be gentle — this hits a LIVE
 PRODUCTION instance. Objects that return nothing/errors on this instance are skipped with a
 noted reason rather than forced.
@@ -101,7 +101,7 @@ def cfg(action: str, **params) -> dict:
 
 
 def _structured(data_object, **params) -> dict:
-    base = dict(mode="structured", data_object=data_object, page_size=5, load_type="incremental_load")
+    base = dict(mode="structured", data_object=data_object, page_size=25, load_type="incremental_load")
     base.update(params)
     return cfg("run", **base)
 
@@ -171,7 +171,7 @@ CASES = {
             "run",
             mode="raw",
             output_table="raw_feedback",
-            page_size=5,
+            page_size=25,
             # The variable types MUST match the connection's real arg types on this instance
             # (feedback: first Int!, after ID); the static contract check only requires the
             # $first/$after/pageInfo tokens to be present, which they are.
@@ -192,7 +192,7 @@ CASES = {
             "validateQuery",
             mode="raw",
             output_table="raw_feedback",
-            page_size=5,
+            page_size=25,
             raw_query=(
                 "query ($first: Int!, $after: ID) { "
                 "feedback(first: $first, after: $after) { "

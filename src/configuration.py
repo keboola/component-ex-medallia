@@ -32,13 +32,15 @@ _GRAPHQL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # path separator or other special character, so a crafted name cannot escape the output dir.
 _SAFE_TABLE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# Medallia API hard ceiling for the ``first`` page-size argument (reference repo:
-# MAX_RECORDS_PER_REQUEST = 1000). The configured value is clamped to this.
-MAX_PAGE_SIZE = 1000
+# Page-size bounds for the ``first`` argument. Medallia allows up to 1000, but the whole page
+# is parsed into memory before rows stream to disk (GraphQL returns one JSON blob per page), so
+# ``page_size × selected-fields`` drives peak RAM. Capped at 500 (and floored at 25) to keep a
+# page well within the component's memory limit even with a wide field selection.
+MIN_PAGE_SIZE = 25
+MAX_PAGE_SIZE = 500
 
-# Component-level default page size. Matches the reference extractor's default (100): a
-# modest page is gentler on the live instance / 24h quota than the API ceiling while still
-# keeping the request count low. Still clamped to ``MAX_PAGE_SIZE``.
+# Component-level default page size: a modest page is gentle on the live instance / 24h quota
+# and keeps peak memory low. Clamped to [MIN_PAGE_SIZE, MAX_PAGE_SIZE].
 DEFAULT_PAGE_SIZE = 100
 
 
@@ -181,8 +183,11 @@ class RowConfiguration(BaseModel):
     @classmethod
     def _clamp_page_size(cls, value: int) -> int:
         if value > MAX_PAGE_SIZE:
-            logging.warning("page_size %s exceeds the Medallia maximum; clamping to %s.", value, MAX_PAGE_SIZE)
+            logging.warning("page_size %s exceeds the maximum; clamping to %s.", value, MAX_PAGE_SIZE)
             return MAX_PAGE_SIZE
+        if value < MIN_PAGE_SIZE:
+            logging.warning("page_size %s is below the minimum; raising to %s.", value, MIN_PAGE_SIZE)
+            return MIN_PAGE_SIZE
         return value
 
     @computed_field

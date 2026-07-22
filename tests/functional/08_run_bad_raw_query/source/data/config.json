@@ -9,6 +9,6 @@
     "mode": "raw",
     "raw_query": "query { feedback { nodes { id } } }",
     "output_table": "raw_feedback",
-    "page_size": 5
+    "page_size": 25
   }
 }

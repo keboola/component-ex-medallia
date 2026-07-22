@@ -8,7 +8,7 @@
     "#client_secret": "DUMMY_CLIENT_SECRET",
     "mode": "structured",
     "data_object": "feedback",
-    "page_size": 5,
+    "page_size": 25,
     "load_type": "incremental_load",
     "fields": [
       "a_customerid",
