@@ -121,7 +121,11 @@ class RowConfiguration(BaseModel):
     incremental_field: str = Field(default="", description="Date/int field ID driving the incremental watermark.")
     initial_start: str = Field(
         default="",
-        description="First-run lower bound: ISO date, epoch seconds, or a relative expression (e.g. '5 days ago').",
+        description="Start Date: ISO date, epoch seconds, or a relative expression (e.g. '5 days ago').",
+    )
+    end_date: str = Field(
+        default="",
+        description="End Date (upper bound): ISO date, epoch seconds, or a relative expression; empty = now.",
     )
     filters: str = Field(default="", description="Optional Medallia filter tree as a JSON string.")
     # Raw mode.

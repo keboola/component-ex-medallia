@@ -71,7 +71,7 @@
         "dependencies": {
           "mode": "raw"
         },
-        "tooltip": "Must declare $first and $after variables (with your connection's ACTUAL argument types — on Medallia these are typically first: Int! and after: ID, not Int/String), pass them to exactly one top-level connection, and select nodes { … } and pageInfo { hasNextPage endCursor }. The component injects first/after (after starts as null, then the endCursor) and pages via pageInfo, but runs your query verbatim without rewriting variable types. Raw mode is always a full load; embed your own date filter for incremental extraction."
+        "tooltip": "Must declare $first and $after variables (with your connection's ACTUAL argument types — on Medallia these are typically first: Int! and after: ID, not Int/String), pass them to exactly one top-level connection, and select nodes { … } and pageInfo { hasNextPage endCursor }. The component injects first/after (after starts as null, then the endCursor) and pages via pageInfo, but runs your query verbatim without rewriting variable types. You may also use {{start_date}} and {{end_date}} placeholders anywhere in the query — they are replaced with the resolved Start Date / End Date (relative dates like '5 days ago' supported), e.g. `gte: \"{{start_date}}\"`. Raw mode is always a full load."
       },
       "propertyOrder": 40
     },
@@ -136,14 +136,20 @@
     "initial_start": {
       "type": "string",
       "title": "Start Date",
-      "description": "Only fetch records with the Date Field on/after this; empty loads full history.",
+      "description": "Window start / {{start_date}} placeholder value; empty = no lower bound.",
       "options": {
-        "dependencies": {
-          "mode": "structured"
-        },
-        "tooltip": "Lower bound on the Date Field, applied to BOTH load types — Full Load overwrites the table from this point; Incremental seeds the first run and then resumes from the watermark. Accepts an ISO date (e.g. 2026-01-01), epoch seconds, or a relative expression such as 'yesterday', '5 days ago', or 'last monday'. Leave empty to load full history. (Requires a Date Field.)"
+        "tooltip": "Start of the extraction window. STRUCTURED mode: lower bound on the Date Field, applied to both load types (Full Load overwrites from here; Incremental seeds the first run, then resumes from the watermark; requires a Date Field). RAW mode: substituted into your query wherever you write {{start_date}}. Accepts an ISO date (e.g. 2026-01-01), epoch seconds, or a relative expression such as 'yesterday', '5 days ago', or 'last monday'. Leave empty for no lower bound."
       },
       "propertyOrder": 90
+    },
+    "end_date": {
+      "type": "string",
+      "title": "End Date",
+      "description": "Window end / {{end_date}} placeholder value; empty = now.",
+      "options": {
+        "tooltip": "End of the extraction window (inclusive of the given day). STRUCTURED mode: upper bound on the Date Field for both load types; empty means up to now. RAW mode: substituted wherever you write {{end_date}}. Accepts an ISO date, epoch seconds, or a relative expression such as 'yesterday' or '5 days ago'."
+      },
+      "propertyOrder": 95
     },
     "filters": {
       "type": "string",

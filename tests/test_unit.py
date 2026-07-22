@@ -962,6 +962,46 @@ class TestUpperBound:
             bound = Component._upper_bound(is_int=False)
         assert bound == "2026-07-16"
 
+    def test_explicit_end_date_is_inclusive_next_day(self):
+        # lt bound, so an inclusive End Date resolves to the day AFTER (records through end-of-day).
+        assert Component._upper_bound(is_int=False, end_date="2026-01-10") == "2026-01-11"
+        assert Component._upper_bound(is_int=True, end_date="2026-01-10") == 1768089600
+
+    def test_relative_end_date(self):
+        with freeze_time("2026-07-16T12:00:00+00:00"):
+            assert Component._upper_bound(is_int=False, end_date="yesterday") == "2026-07-16"  # 07-15 +1
+
+    def test_bad_end_date_raises_user_exception(self):
+        with pytest.raises(UserException, match="Could not parse 'End Date'"):
+            Component._upper_bound(is_int=False, end_date="not a date")
+
+
+class TestRawPlaceholders:
+    def _row(self, query: str, start: str = "", end: str = "") -> RowConfiguration:
+        return RowConfiguration(mode="raw", raw_query=query, output_table="t", initial_start=start, end_date=end)
+
+    def test_substitutes_start_and_end(self):
+        comp = object.__new__(Component)
+        q = 'q { feedback(filter:{and:[{gte:"{{start_date}}"},{lt:"{{end_date}}"}]}) }'
+        out = comp._apply_raw_placeholders(self._row(q, start="2026-01-01", end="2026-02-01"))
+        assert '"2026-01-01"' in out and '"2026-02-01"' in out and "{{" not in out
+
+    def test_relative_start_placeholder(self):
+        comp = object.__new__(Component)
+        with freeze_time("2026-07-16T12:00:00+00:00"):
+            out = comp._apply_raw_placeholders(self._row('gte:"{{start_date}}"', start="5 days ago"))
+        assert out == 'gte:"2026-07-11"'
+
+    def test_placeholder_without_value_raises(self):
+        comp = object.__new__(Component)
+        with pytest.raises(UserException, match=r"\{\{start_date\}\}"):
+            comp._apply_raw_placeholders(self._row('gte:"{{start_date}}"', start=""))
+
+    def test_no_placeholder_leaves_query_unchanged(self):
+        comp = object.__new__(Component)
+        q = "q { feedback(first:$first) { nodes { id } pageInfo { hasNextPage endCursor } } }"
+        assert comp._apply_raw_placeholders(self._row(q, start="2026-01-01")) == q
+
 
 # ==================================================================================================
 # 10. hasNextPage paginator
@@ -1294,29 +1334,6 @@ class TestBaseTypeMapping:
     def test_no_metadata_defaults_to_string(self):
         result = Component._base_type("unknown", {})
         assert result == BaseType.string()
-
-
-# ==================================================================================================
-# 14. _humanize
-# ==================================================================================================
-
-
-class TestHumanize:
-    def test_feedback(self):
-        assert Component._humanize("feedback") == "Feedback"
-
-    def test_unit_warnings(self):
-        assert Component._humanize("unitWarnings") == "Unit Warnings"
-
-    def test_social_urls_actual_regex_behavior(self):
-        # The camelCase->spaced regex splits on (lower/digit -> upper) AND (upper -> upper+lower)
-        # boundaries; for a trailing all-caps acronym + lowercase suffix ("URLs") this actually
-        # splits the acronym itself rather than treating it as one word. Documented here as the
-        # ACTUAL behavior, not the idealized "Social URLs".
-        assert Component._humanize("socialURLs") == "Social UR Ls"
-
-    def test_social_urls_health(self):
-        assert Component._humanize("socialUrlsHealth") == "Social Urls Health"
 
 
 # ==================================================================================================

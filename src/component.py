@@ -428,7 +428,7 @@ class Component(ComponentBase):
         # only decides the write mode. Incremental additionally persists + resumes a watermark.
         windowed = self._date_window_supported(row, shape)
         lower_bound = self._compute_lower_bound(row, is_int) if windowed else None
-        upper_bound = self._upper_bound(is_int) if windowed else None
+        upper_bound = self._upper_bound(is_int, row.end_date) if windowed else None
 
         scalar_fields = list(shape.scalar_fields) if shape.shape in (SHAPE_DATA, SHAPE_SCALAR) else []
         builder = GenericQueryBuilder(
@@ -464,16 +464,33 @@ class Component(ComponentBase):
             raise UserException("Raw mode requires a GraphQL query in 'raw_query'.")
         if not row.output_table.strip():
             raise UserException("Raw mode requires an 'output_table' name.")
-        self._validate_raw_static(row.raw_query)
+        # Substitute {{start_date}} / {{end_date}} (relative-aware) into the user's query first.
+        query = self._apply_raw_placeholders(row)
+        self._validate_raw_static(query)
         # Cost pre-flight at run start (compile + price without consuming quota). $first/$after
         # travel as variables so the priced query is identical to the one that will run.
-        client.run_metadata_query(
-            row.raw_query, compute_cost_only=True, variables={"first": row.page_size, "after": None}
-        )
+        client.run_metadata_query(query, compute_cost_only=True, variables={"first": row.page_size, "after": None})
 
         table_name = self._output_table_name(row.output_table, "")
-        nodes = client.paginate(row.raw_query, row.page_size, self._raw_connection)
+        nodes = client.paginate(query, row.page_size, self._raw_connection)
         self._write_raw_table(table_name, nodes)
+
+    def _apply_raw_placeholders(self, row: RowConfiguration) -> str:
+        """Replace ``{{start_date}}`` / ``{{end_date}}`` in a raw query with the resolved dates.
+
+        Each is resolved the same way as the structured Start Date (absolute or relative, e.g.
+        ``5 days ago``) to a plain ``YYYY-MM-DD`` string — the user controls the surrounding
+        quoting and operator in their query. A placeholder used with an empty date is an error.
+        """
+        query = row.raw_query
+        for token, raw_value in (("{{start_date}}", row.initial_start), ("{{end_date}}", row.end_date)):
+            if token not in query:
+                continue
+            if not raw_value.strip():
+                raise UserException(f"Raw query uses {token} but the corresponding date field is empty.")
+            resolved = self._resolve_initial_start(raw_value, is_int=False)
+            query = query.replace(token, str(resolved))
+        return query
 
     # -- configuration -----------------------------------------------------------------
 
@@ -608,12 +625,30 @@ class Component(ComponentBase):
             return value
 
     @staticmethod
-    def _upper_bound(is_int: bool) -> int | str:
-        """Run-start upper bound in the field's format (INT seconds, else date-only string).
+    def _upper_bound(is_int: bool, end_date: str = "") -> int | str:
+        """Upper bound in the field's format (INT seconds, else ``YYYY-MM-DD`` — Medallia rejects a
+        ``…Z`` timestamp, a v1 live-verified fact).
 
-        A DATE/DATETIME field is bounded with ``YYYY-MM-DD`` (Medallia rejects a ``…Z``
-        timestamp — a v1 live-verified fact); today's records arrive on the next run.
+        With an explicit End Date the window closes there, INCLUSIVE of that day: the filter uses
+        ``lt``, so the bound is the day AFTER the resolved End Date. Empty End Date → now (today's
+        partial day arrives on the next run). End Date accepts absolute or relative expressions.
         """
+        if end_date.strip():
+            text = end_date.strip()
+            if text.isdigit():
+                day = datetime.fromtimestamp(int(text), tz=UTC)
+            else:
+                parsed = dateparser.parse(
+                    text, settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False}
+                )
+                if parsed is None:
+                    raise UserException(
+                        f"Could not parse 'End Date' value {text!r}. Use an ISO date (e.g. 2026-01-01), "
+                        "epoch seconds, or a relative expression like 'yesterday' or '5 days ago'."
+                    )
+                day = datetime(parsed.year, parsed.month, parsed.day, tzinfo=UTC)
+            upper = datetime(day.year, day.month, day.day, tzinfo=UTC) + timedelta(days=1)
+            return int(upper.timestamp()) if is_int else upper.strftime("%Y-%m-%d")
         now = datetime.now(tz=UTC)
         return int(now.timestamp()) if is_int else now.strftime("%Y-%m-%d")
 
@@ -854,7 +889,9 @@ class Component(ComponentBase):
             objects = []
         if not objects:
             objects = list(STATIC_EXTRACTABLE_OBJECTS)
-        return [SelectElement(value=name, label=self._humanize(name)) for name in objects]
+        # Label = the raw GraphQL object id (no humanize): predictable, matches the docs, and
+        # avoids acronym mangling (socialURLs → "Social UR Ls"). The value is the id regardless.
+        return [SelectElement(value=name, label=name) for name in objects]
 
     @sync_action("listFields")
     def list_fields(self) -> list[SelectElement]:
@@ -966,13 +1003,6 @@ class Component(ComponentBase):
         if data_type in {"DATE", "DATETIME"}:
             return True
         return data_type in {"INT", "INTEGER"} and bool(node.get("sortable"))
-
-    @staticmethod
-    def _humanize(name: str) -> str:
-        """Turn a camelCase object name into a Title Case label (e.g. socialURLs → Social URLs)."""
-        spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
-        spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", spaced)
-        return " ".join(word[:1].upper() + word[1:] for word in spaced.split())
 
 
 """
