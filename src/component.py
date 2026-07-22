@@ -333,8 +333,9 @@ _METADATA_PAGE_SIZE = 500
 _MAX_METADATA_PAGES = 400  # ceiling guard (≤200k fields); real catalogues are far smaller
 # The Field-type selection includes ``usedOnPrograms`` so the picker can hide fields not used on
 # any program (they would only ever produce empty columns). Only the ``fields`` catalogue (the
-# Field type) exposes it; the other catalogues use the base selection.
-_FIELD_SELECTION = "id name dataType sortable multivalued usedOnPrograms"
+# Field type) exposes it; the other catalogues use the base selection. ``usedOnPrograms`` is a
+# ``[Program!]!`` (not a scalar), so it needs a sub-selection.
+_FIELD_SELECTION = "id name dataType sortable multivalued usedOnPrograms { id }"
 _BASE_SELECTION = "id name dataType sortable multivalued"
 
 
@@ -359,8 +360,9 @@ class _MetadataCatalog:
             root = data.get(self.node)
             container = root.get("fields") if isinstance(root, dict) else None
             return [item for item in (container or []) if isinstance(item, dict)]
+        # Medallia's Relay connections type the cursor as ``ID`` (not ``String``) — verified live.
         query = (
-            f"query ($first: Int!, $after: String) {{ {self.node}(first: $first, after: $after) "
+            f"query ($first: Int!, $after: ID) {{ {self.node}(first: $first, after: $after) "
             f"{{ nodes {{ {self.selection} }} pageInfo {{ hasNextPage endCursor }} }} }}"
         )
         out: list[dict[str, Any]] = []
