@@ -1042,20 +1042,6 @@ class TestPaginator:
         nodes = list(client.fetch_object("feedback", "query {}", page_size=50))
         assert nodes == [{"id": "1"}]
 
-    def test_max_pages_cap_stops_even_when_has_next_page_true(self):
-        session = _StubSession(
-            [
-                _page_response([{"id": "1"}], has_next=True, end_cursor="c1"),
-                _page_response([{"id": "2"}], has_next=True, end_cursor="c2"),
-            ]
-        )
-        client = MedalliaClient(
-            api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session, max_pages=1
-        )
-        nodes = list(client.fetch_object("feedback", "query {}", page_size=50))
-        assert nodes == [{"id": "1"}]
-        assert len(session.requests) == 1
-
     def test_has_next_page_true_with_empty_end_cursor_stops_safely(self):
         session = _StubSession([_page_response([{"id": "1"}], has_next=True, end_cursor="")])
         client = MedalliaClient(api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session)
@@ -1293,14 +1279,24 @@ class TestOutputTableName:
 
 
 class TestBaseTypeMapping:
+    # Medallia's fieldData/data APIs return display *labels* (strings) for every field, and
+    # numeric-declared fields (dataType INT/FLOAT) can carry enumerated text — e.g. e_status is
+    # dataType=INT but returns "COMPLETED", a_customerid is INT but can be non-numeric. Typing
+    # those INTEGER/NUMERIC breaks the warehouse load, so catalogue numerics are typed STRING;
+    # only the temporal types (parseable machine formats) stay typed.
     @pytest.mark.parametrize("data_type", ["INT", "INTEGER"])
-    def test_int_maps_to_integer(self, data_type):
+    def test_int_datatype_maps_to_string(self, data_type):
         result = Component._base_type("e_nps", {"e_nps": {"dataType": data_type}})
-        assert result == BaseType.integer()
+        assert result == BaseType.string()
 
-    def test_float_maps_to_numeric(self):
+    def test_float_datatype_maps_to_string(self):
         result = Component._base_type("score", {"score": {"dataType": "FLOAT"}})
-        assert result == BaseType.numeric()
+        assert result == BaseType.string()
+
+    def test_int_declared_field_with_text_value_is_string(self):
+        # Regression for the platform load failure: e_status (dataType=INT) holds "COMPLETED".
+        result = Component._base_type("e_status", {"e_status": {"dataType": "INT"}})
+        assert result == BaseType.string()
 
     def test_date_maps_to_date(self):
         result = Component._base_type("e_date", {"e_date": {"dataType": "DATE"}})
@@ -1433,7 +1429,9 @@ class TestFieldMetadataRouting:
         # _base_type now types customers columns from dataType instead of defaulting to string
         assert Component._base_type("c_created", meta) == BaseType.date()
         assert Component._base_type("c_lastseen", meta) == BaseType.timestamp()
-        assert Component._base_type("c_loyalty", meta) == BaseType.integer()
+        # c_loyalty has dataType=INT, but Medallia catalogue numerics are typed STRING (they can
+        # carry enumerated labels); only temporal dataTypes stay typed.
+        assert Component._base_type("c_loyalty", meta) == BaseType.string()
 
     def test_metadata_fetch_failure_degrades_to_scalar_seed(self):
         client = _StubMetadataClient(error=MedalliaClientError("boom"))

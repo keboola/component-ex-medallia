@@ -508,11 +508,7 @@ class Component(ComponentBase):
             client_id=config.client_id,
             client_secret=config.client_secret,
         )
-        # MEDALLIA_MAX_PAGES (optional): hard page cap, unset in production. Bounds live-instance
-        # blast radius while recording VCR cassettes; also a defensive stop.
-        max_pages_env = os.environ.get("MEDALLIA_MAX_PAGES")
-        max_pages = int(max_pages_env) if max_pages_env else None
-        return MedalliaClient(api_host=config.api_host, token_manager=token_manager, max_pages=max_pages)
+        return MedalliaClient(api_host=config.api_host, token_manager=token_manager)
 
     # -- object / shape resolution -----------------------------------------------------
 
@@ -753,10 +749,14 @@ class Component(ComponentBase):
             if meta.get("multivalued"):
                 return BaseType.string()  # JSON-encoded list
             data_type = str(meta["dataType"]).upper()
-            if data_type in {"INT", "INTEGER"}:
-                return BaseType.integer()
-            if data_type == "FLOAT":
-                return BaseType.numeric()
+            # Medallia's fieldData/data APIs return display *labels* (strings) for every field,
+            # and numeric-declared fields (dataType INT/FLOAT) routinely carry enumerated text —
+            # e.g. e_status has dataType=INT but its value is "COMPLETED", and a_customerid is INT
+            # yet can hold non-numeric ids. Typing such a column INTEGER/NUMERIC makes the
+            # warehouse reject the text at load time. Only the temporal types come back in a
+            # parseable machine format, so only those are typed; every other catalogue field is
+            # STRING. (Bare GraphQL node scalars, typed below via scalar_type, ARE reliably typed
+            # by the GraphQL contract, so they keep their INT/FLOAT/BOOLEAN mapping.)
             if data_type == "DATE":
                 return BaseType.date()
             if data_type == "DATETIME":

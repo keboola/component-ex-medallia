@@ -1,6 +1,6 @@
 [
   {
-    "name": "03_run_missing_instance_host",
+    "name": "01_run_missing_instance_host",
     "description": "structured run with required root field instance_host missing -> exit 1 (no HTTP).",
     "config": {
       "action": "run",
@@ -11,17 +11,15 @@
         "#client_secret": "DUMMY_CLIENT_SECRET",
         "mode": "structured",
         "data_object": "feedback",
-        "fields": [
-          "a_customerid"
-        ],
+        "fields": ["a_customerid"],
         "load_type": "incremental_load",
         "incremental_field": "a_initial_finish_timestamp",
-        "page_size": 5
+        "page_size": 25
       }
     }
   },
   {
-    "name": "04_run_missing_client_secret",
+    "name": "02_run_missing_client_secret",
     "description": "structured run with #client_secret (credentials) missing -> exit 1 (no HTTP).",
     "config": {
       "action": "run",
@@ -32,18 +30,16 @@
         "client_id": "DUMMY_CLIENT_ID",
         "mode": "structured",
         "data_object": "feedback",
-        "fields": [
-          "a_customerid"
-        ],
+        "fields": ["a_customerid"],
         "load_type": "incremental_load",
         "incremental_field": "a_initial_finish_timestamp",
-        "page_size": 5
+        "page_size": 25
       }
     }
   },
   {
-    "name": "05_testConnection_missing_creds",
-    "description": "testConnection with credentials missing -> clean exit 1 (not exit 2).",
+    "name": "03_testConnection_missing_creds",
+    "description": "testConnection with credentials missing -> clean exit 1 (not exit 2), no HTTP.",
     "config": {
       "action": "testConnection",
       "parameters": {
@@ -55,8 +51,8 @@
     }
   },
   {
-    "name": "06_listObjects_missing_creds",
-    "description": "listObjects with credentials missing -> clean exit 1 (not exit 2).",
+    "name": "04_listObjects_missing_creds",
+    "description": "listObjects with credentials missing -> clean exit 1 (not exit 2), no HTTP.",
     "config": {
       "action": "listObjects",
       "parameters": {
@@ -68,8 +64,8 @@
     }
   },
   {
-    "name": "07_config_error_secret_leak_guard",
-    "description": "sentinel #client_secret + missing field -> exit 1; secret must not leak (see tests/test_security.py).",
+    "name": "05_config_error_secret_leak_guard",
+    "description": "sentinel #client_secret + missing instance_host -> exit 1; secret must not leak (leak assertion lives in tests/test_unit.py::TestSecretLeakGuard).",
     "config": {
       "action": "run",
       "parameters": {
@@ -79,17 +75,15 @@
         "client_id": "DUMMY_CLIENT_ID",
         "mode": "structured",
         "data_object": "feedback",
-        "fields": [
-          "a_customerid"
-        ],
+        "fields": ["a_customerid"],
         "load_type": "incremental_load",
-        "page_size": 5
+        "page_size": 25
       }
     }
   },
   {
-    "name": "08_run_bad_raw_query",
-    "description": "raw mode with a query missing $first/$after/pageInfo -> static contract check -> exit 1 (no HTTP).",
+    "name": "06_run_bad_raw_query",
+    "description": "raw mode with a query missing $first/$after/pageInfo -> static contract check -> exit 1 (no HTTP; static check runs before any token mint).",
     "config": {
       "action": "run",
       "parameters": {
@@ -101,7 +95,7 @@
         "mode": "raw",
         "raw_query": "query { feedback { nodes { id } } }",
         "output_table": "raw_feedback",
-        "page_size": 5
+        "page_size": 25
       }
     }
   }

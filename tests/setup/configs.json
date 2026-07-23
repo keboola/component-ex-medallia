@@ -1,7 +1,7 @@
 [
   {
-    "name": "01_testConnection",
-    "description": "testConnection sync action \u2014 token mint + compute_cost_only pre-flight (no quota).",
+    "name": "07_testConnection",
+    "description": "testConnection sync action - token mint + compute_cost_only pre-flight (no quota).",
     "config": {
       "action": "testConnection",
       "parameters": {
@@ -14,10 +14,10 @@
     }
   },
   {
-    "name": "02_listFields",
-    "description": "listFields sync action \u2014 one metadata call; catalogue replaced by a synthetic field set.",
+    "name": "08_listObjects",
+    "description": "listObjects sync action - one __schema introspection; classified into the extractable set.",
     "config": {
-      "action": "listFields",
+      "action": "listObjects",
       "parameters": {
         "instance_host": "example.medallia.com",
         "api_host": "example.apis.medallia.com",
@@ -28,95 +28,58 @@
     }
   },
   {
-    "name": "03_run_missing_instance_host",
-    "description": "run with required root field instance_host missing -> exit 1 (no HTTP).",
-    "config": {
-      "action": "run",
-      "parameters": {
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "fields": [
-          "a_customerid"
-        ],
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "load_type": "incremental_load"
-      }
-    }
-  },
-  {
-    "name": "04_run_missing_client_secret",
-    "description": "run with #client_secret (credentials) missing -> exit 1 (no HTTP).",
-    "config": {
-      "action": "run",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "data_object": "feedback",
-        "fields": [
-          "a_customerid"
-        ],
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "load_type": "incremental_load"
-      }
-    }
-  },
-  {
-    "name": "05_testConnection_missing_creds",
-    "description": "testConnection with credentials missing -> clean exit 1 (not exit 2).",
-    "config": {
-      "action": "testConnection",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID"
-      }
-    }
-  },
-  {
-    "name": "06_listFields_missing_creds",
-    "description": "listFields with credentials missing -> clean exit 1 (not exit 2).",
+    "name": "09_listFields_feedback",
+    "description": "listFields sync action for feedback - the field catalogue (values replaced by a synthetic set at record time).",
     "config": {
       "action": "listFields",
       "parameters": {
         "instance_host": "example.medallia.com",
         "api_host": "example.apis.medallia.com",
         "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID"
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "feedback"
       }
     }
   },
   {
-    "name": "07_config_error_secret_leak_guard",
-    "description": "sentinel #client_secret + missing field -> exit 1; secret must not leak (see tests/test_security.py).",
+    "name": "10_listDateFields_feedback",
+    "description": "listDateFields sync action for feedback - incremental-field candidates (DATE/DATETIME + sortable INT) from the same catalogue.",
     "config": {
-      "action": "run",
+      "action": "listDateFields",
       "parameters": {
-        "#client_secret": "SENTINEL_SECRET_DO_NOT_LEAK",
+        "instance_host": "example.medallia.com",
         "api_host": "example.apis.medallia.com",
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
-        "data_object": "feedback",
-        "fields": [
-          "a_customerid"
-        ],
-        "survey_id_field_id": "a_surveyid",
-        "load_type": "incremental_load"
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "feedback"
       }
     }
   },
   {
-    "name": "08_epoch_watermark",
-    "description": "Epoch watermark: finish=a_initial_finish_timestamp (epoch). Asserts INTEGER typing + advance.",
+    "name": "11_validateQuery_preview",
+    "description": "validateQuery sync action - cost pre-flight then a small live row preview (Keboola standard).",
+    "config": {
+      "action": "validateQuery",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "raw",
+        "output_table": "raw_feedback",
+        "page_size": 25,
+        "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
+      }
+    }
+  },
+  {
+    "name": "12_feedback",
+    "description": "feedback (shape a, fieldData, node-id PK) incremental on the epoch finish field, bounded to a fixed 2h epoch window [1781542800,1781550000) so the recording stays small and deterministic.",
     "config": {
       "action": "run",
       "parameters": {
@@ -125,23 +88,20 @@
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
         "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
         "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "a_initial_finish_timestamp",
-        "finish_date_field_type": "epoch",
-        "fields": [
-          "a_customerid",
-          "e_accepteddate"
-        ],
         "page_size": 25,
         "load_type": "incremental_load",
-        "initial_start_epoch": 1780272000
+        "fields": ["a_customerid", "e_accepteddate"],
+        "incremental_field": "a_initial_finish_timestamp",
+        "initial_start": "1781542800",
+        "end_date": "1781550000"
       }
     }
   },
   {
-    "name": "09_incremental_resume",
-    "description": "Incremental resume from a seeded in/state.json (see source/set_up.py); watermark advances.",
+    "name": "13_invitations",
+    "description": "invitations (shape a, fieldData, node-id PK) incremental on the epoch finish field, bounded to the same fixed 2h epoch window as 12_feedback. Exercises the object-name path for a second object.",
     "config": {
       "action": "run",
       "parameters": {
@@ -150,22 +110,20 @@
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
         "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "fields": [
-          "a_customerid",
-          "e_accepteddate"
-        ],
+        "mode": "structured",
+        "data_object": "invitations",
         "page_size": 25,
-        "load_type": "incremental_load"
+        "load_type": "incremental_load",
+        "fields": ["a_customerid", "e_accepteddate"],
+        "incremental_field": "a_initial_finish_timestamp",
+        "initial_start": "1781542800",
+        "end_date": "1781550000"
       }
     }
   },
   {
-    "name": "10_full_load",
-    "description": "Full load (load_type=full_load): non-incremental manifest + boundary-deduped output.",
+    "name": "14_invitations_full_load",
+    "description": "invitations FULL_LOAD (overwrite write mode) bounded to the same fixed 2h epoch window; exercises the full-load write path (no watermark state persisted) vs the incremental cases.",
     "config": {
       "action": "run",
       "parameters": {
@@ -174,23 +132,20 @@
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
         "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "fields": [
-          "a_customerid",
-          "e_accepteddate"
-        ],
+        "mode": "structured",
+        "data_object": "invitations",
         "page_size": 25,
         "load_type": "full_load",
-        "initial_start_value": "2026-06-25"
+        "fields": ["a_customerid", "e_accepteddate", "e_status"],
+        "incremental_field": "a_initial_finish_timestamp",
+        "initial_start": "1781542800",
+        "end_date": "1781550000"
       }
     }
   },
   {
-    "name": "11_empty_result",
-    "description": "Empty result: an impossible filter -> 0 rows, no lower bound -> state left unchanged.",
+    "name": "15_raw",
+    "description": "raw mode - user Relay query paginated via $first/$after; full load, no state. Bounded by an in-query epoch filter (same 2h window) so pagination terminates quickly on a small slice.",
     "config": {
       "action": "run",
       "parameters": {
@@ -199,131 +154,10 @@
         "company_name": "example",
         "client_id": "DUMMY_CLIENT_ID",
         "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "fields": [
-          "a_customerid",
-          "e_accepteddate"
-        ],
+        "mode": "raw",
+        "output_table": "raw_feedback",
         "page_size": 25,
-        "load_type": "incremental_load",
-        "filters": {
-          "fieldIds": [
-            "e_creationdate"
-          ],
-          "gt": "2099-01-01"
-        }
-      }
-    }
-  },
-  {
-    "name": "12_multi_value_field",
-    "description": "Multi-value field: includes a_recognition_sentiment_types -> JSON-encoded multi-value column.",
-    "config": {
-      "action": "run",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "fields": [
-          "a_recognition_sentiment_types",
-          "a_customerid"
-        ],
-        "page_size": 25,
-        "load_type": "incremental_load",
-        "initial_start_value": "2026-06-25"
-      }
-    }
-  },
-  {
-    "name": "13_business_filters",
-    "description": "Business filters applied (filters=...) and injected into the keyset query.",
-    "config": {
-      "action": "run",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "e_creationdate",
-        "finish_date_field_type": "datetime",
-        "fields": [
-          "a_customerid",
-          "e_accepteddate"
-        ],
-        "page_size": 25,
-        "load_type": "incremental_load",
-        "filters": {
-          "fieldIds": [
-            "e_accepteddate"
-          ],
-          "gt": "2020-01-01"
-        },
-        "initial_start_value": "2026-06-25"
-      }
-    }
-  },
-  {
-    "name": "14_pagination_multi_page",
-    "description": "Pagination across 3 pages (page_size=5, dense epoch field, MEDALLIA_MAX_PAGES=3 cap).",
-    "config": {
-      "action": "run",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "#client_secret": "DUMMY_CLIENT_SECRET",
-        "data_object": "feedback",
-        "survey_id_field_id": "a_surveyid",
-        "finish_date_field_id": "a_initial_finish_timestamp",
-        "finish_date_field_type": "epoch",
-        "fields": [
-          "a_customerid",
-          "e_accepteddate"
-        ],
-        "page_size": 25,
-        "load_type": "incremental_load",
-        "initial_start_epoch": 1780272000
-      }
-    }
-  },
-  {
-    "name": "15_auth_401",
-    "description": "401: one deliberately-wrong #client_secret -> actionable UserException, exit 1.",
-    "config": {
-      "action": "testConnection",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "#client_secret": "DUMMY_CLIENT_SECRET"
-      }
-    }
-  },
-  {
-    "name": "16_bad_request_4xx",
-    "description": "4xx: an unknown tenant in the token URL -> HTTP 400 -> actionable UserException, exit 1.",
-    "config": {
-      "action": "testConnection",
-      "parameters": {
-        "instance_host": "example.medallia.com",
-        "api_host": "example.apis.medallia.com",
-        "company_name": "example",
-        "client_id": "DUMMY_CLIENT_ID",
-        "#client_secret": "DUMMY_CLIENT_SECRET"
+        "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after, filter: {fieldIds: [\"a_initial_finish_timestamp\"], gte: \"1781542800\", lt: \"1781550000\"}) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
       }
     }
   }

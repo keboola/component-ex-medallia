@@ -1,7 +1,0 @@
-{
-  "_metadata": {"freeze_time": "2026-07-16T12:00:00", "keboola_vcr_version": "0.5.0", "recorded_at": "2026-07-16T16:37:04.146978+00:00"},
-  "interactions": [
-    {"request": {"body": "grant_type=client_credentials", "headers": {"Accept": ["*/*"], "Content-Length": ["29"], "Content-Type": ["application/x-www-form-urlencoded"]}, "method": "POST", "uri": "https://instance-host.redacted/oauth/company/token"}, "response": {"body": {"string": "{\"error\":\"invalid_client\"}"}, "headers": {"Content-Length": ["26"], "Content-Type": ["application/json"]}, "status": {"code": 401, "message": "Unauthorized"}}}
-  ],
-  "version": 1
-}

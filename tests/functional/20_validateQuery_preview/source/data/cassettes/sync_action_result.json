@@ -1,1 +1,0 @@
-{"message": "Raw query is valid. Preview of the first 5 row(s):\n\n| id | a_customerid |\n| --- | --- |\n| RESP-0001 | 100 |\n| RESP-0002 | 200 |\n| RESP-0003 | 300 |\n| RESP-0004 | 400 |\n| RESP-0005 | 500 |", "type": "info", "status": "success"}

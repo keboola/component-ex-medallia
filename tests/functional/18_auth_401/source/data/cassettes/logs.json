@@ -1,5 +1,0 @@
-{
-  "exit_code": 1,
-  "stderr": "Medallia rejected the OAuth credentials (401). Check client_id / #client_secret, instance host and company name.",
-  "logs": []
-}
