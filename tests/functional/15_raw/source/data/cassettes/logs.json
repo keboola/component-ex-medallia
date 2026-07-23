@@ -1,0 +1,36 @@
+{
+  "exit_code": null,
+  "stderr": "",
+  "logs": [
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Minting Medallia OAuth token.",
+      "timestamp": "2026-07-16T12:00:00.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "compute_cost_only pre-flight succeeded: Estimated query cost is: 177. To actually get results please remove the 'compute cost only' parameter.",
+      "timestamp": "2026-07-16T12:00:00.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 1: 25 node(s).",
+      "timestamp": "2026-07-16T12:00:00.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 2: 12 node(s).",
+      "timestamp": "2026-07-16T12:00:00.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Wrote 37 record(s) to raw_feedback.csv (raw mode, full load).",
+      "timestamp": "2026-07-16T12:00:00.000Z"
+    }
+  ]
+}

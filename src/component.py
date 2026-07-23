@@ -65,21 +65,27 @@ try:
     from keboola.vcr import BaseSanitizer, DefaultSanitizer, UrlPatternSanitizer
 
     class MedalliaResponseBodySanitizer(BaseSanitizer):
-        """Overwrite Query API response payloads with deterministic synthetic data.
+        """Overwrite Query API response node payloads with deterministic synthetic data.
 
         Free-text verbatim fields can contain arbitrary customer PII, so a denylist is unsafe:
-        this REPLACES every value across every node shape (fieldData / data / bare scalar),
-        every node id, the ``pageInfo.endCursor`` and the request ``after`` cursor, so nothing
-        real survives into a cassette. Values keep their ARITY and SHAPE (a multi-value field
-        stays multi-value; an epoch-int field stays a long integer; a date/datetime field stays
-        date-shaped) so type inference, watermark advance and pagination still behave on replay.
+        this REPLACES every value across every node shape (fieldData / data / bare scalar) and
+        every node id, so nothing real survives into a cassette. Values keep their ARITY and
+        SHAPE (a multi-value field stays multi-value; an epoch-int field stays a long integer; a
+        date/datetime field stays date-shaped) so type inference and watermark advance behave.
+
+        ``scrub_before_read = True``: keboola.vcr applies this sanitizer to the response BEFORE
+        the component reads it during recording (as well as to the cassette), so the component
+        computes its output tables / sync-action results / state from the SYNTHETIC values — the
+        committed ``expected/`` therefore matches replay exactly and never holds real data. Two
+        constraints follow from that contract: it MUST be idempotent (the recorder applies it
+        twice — once pre-read, once on the cassette copy — with the same instance), and it MUST
+        NOT touch any value the component round-trips to the live API. The paging cursor IS
+        round-tripped, so it is scrubbed cassette-only by ``MedalliaCursorSanitizer`` instead.
         """
 
+        scrub_before_read = True
+
         SYNTHETIC_COMMENT = "Synthetic feedback comment."
-        # Cursors may encode offsets/PII (spec risk #7). The request body is NOT part of the VCR
-        # match key (match_on = method/scheme/host/port/path/query), so a normalised cursor never
-        # breaks replay ordering — it only keeps real cursor strings out of the committed cassette.
-        SYNTHETIC_CURSOR = "SYNTHETIC-CURSOR"
         # A fixed synthetic field catalogue. Field IDs are schema identifiers (not PII) and are
         # deliberately the ones the recorded cases select/order by, so replay types columns and
         # detects the INT watermark exactly as the live schema would (an INT finish field →
@@ -132,31 +138,8 @@ try:
 
         def __init__(self) -> None:
             self._node_counter = 0
-            self._cursor_counter = 0
 
-        # -- request: scrub the paging cursor out of the stored body ----------------------
-
-        def before_record_request(self, request):
-            """Normalise the ``after`` paging cursor in the request body (not a match key)."""
-            body = getattr(request, "body", None)
-            if body is None:
-                return request
-            is_bytes = isinstance(body, bytes)
-            text = body.decode("utf-8", "ignore") if is_bytes else body
-            if not isinstance(text, str) or '"after"' not in text:
-                return request
-            try:
-                payload = json.loads(text)
-            except (ValueError, TypeError):  # fmt: skip
-                return request
-            variables = payload.get("variables")
-            if isinstance(variables, dict) and variables.get("after") not in (None, ""):
-                variables["after"] = self.SYNTHETIC_CURSOR
-                new_text = json.dumps(payload)
-                request.body = new_text.encode("utf-8") if is_bytes else new_text
-            return request
-
-        # -- response: overwrite every node value + endCursor -----------------------------
+        # -- response: overwrite every node value (the cursor is scrubbed separately) -----
 
         def before_record_response(self, response: dict) -> dict:
             body = response.get("body")
@@ -189,11 +172,6 @@ try:
                 nodes = obj.get("nodes")
                 if not isinstance(nodes, list):
                     continue
-                page_info = obj.get("pageInfo")
-                if isinstance(page_info, dict) and page_info.get("endCursor"):
-                    self._cursor_counter += 1
-                    page_info["endCursor"] = f"{self.SYNTHETIC_CURSOR}-{self._cursor_counter:04d}"
-                    changed = True
                 if not nodes:
                     continue
                 # The field metadata catalogue (the `fields` query) has a fixed replacement so
@@ -201,9 +179,18 @@ try:
                 # value-overwritten in place regardless of shape (fieldData / data / bare scalar).
                 if key == "fields" and self._is_field_catalog(nodes):
                     obj["nodes"] = [dict(field) for field in self._SYNTHETIC_FIELD_CATALOG]
+                    # Collapse the (possibly multi-page) real catalogue to a single synthetic
+                    # page: with scrub_before_read the component reads this fixed set and stops,
+                    # so exactly one catalogue interaction is recorded and the field defs are not
+                    # duplicated once per real page.
+                    if isinstance(obj.get("pageInfo"), dict):
+                        obj["pageInfo"] = {"hasNextPage": False, "endCursor": None}
                 else:
                     for node in nodes:
-                        if isinstance(node, dict):
+                        # Idempotency (the recorder applies this sanitizer twice — pre-read then
+                        # cassette copy): skip a node already synthesised so a re-run never
+                        # re-numbers already-synthetic values.
+                        if isinstance(node, dict) and not self._is_synthetic_node(node):
                             self._synthesize_node(node)
                 if "totalCount" in obj:
                     obj["totalCount"] = len(obj["nodes"])
@@ -214,6 +201,17 @@ try:
         def _is_field_catalog(nodes: list) -> bool:
             head = nodes[0]
             return isinstance(head, dict) and "dataType" in head and "values" not in head
+
+        @staticmethod
+        def _is_synthetic_node(node: dict) -> bool:
+            """True if a node was already synthesised (idempotency guard for the double apply).
+
+            Synthetic nodes carry a ``RESP-####`` id sentinel; real Medallia node ids are numeric
+            so the prefix never collides. Only id-bearing shapes are recorded here (feedback /
+            invitations / raw feedback all expose ``id``); id-less scalar objects are not recorded.
+            """
+            nid = node.get("id")
+            return isinstance(nid, str) and nid.startswith("RESP-")
 
         def _synthesize_node(self, node: dict) -> None:
             """Overwrite every field of one node, detecting each value's shape."""
@@ -294,6 +292,74 @@ try:
                 return "epoch" if len(sample) >= _EPOCH_MIN_DIGITS else "int"
             return "text"
 
+    class MedalliaCursorSanitizer(BaseSanitizer):
+        """Scrub the Relay paging cursor out of the committed cassette (cassette-only).
+
+        Cursors may encode offsets/PII (spec risk #7), so the request ``after`` and the response
+        ``pageInfo.endCursor`` are normalised to a synthetic value in the cassette. This stays
+        ``scrub_before_read = False`` (the default) on purpose: the component round-trips the
+        cursor to the live API while recording, so it must read the REAL cursor — scrubbing it
+        before read would break live pagination, and keboola.vcr's round-trip guard rejects it.
+        The request body is not part of the VCR match key, so a normalised cursor never affects
+        replay ordering.
+        """
+
+        SYNTHETIC_CURSOR = "SYNTHETIC-CURSOR"
+
+        def __init__(self) -> None:
+            self._cursor_counter = 0
+
+        def before_record_request(self, request):
+            """Normalise the ``after`` paging cursor in the request body (not a match key)."""
+            body = getattr(request, "body", None)
+            if body is None:
+                return request
+            is_bytes = isinstance(body, bytes)
+            text = body.decode("utf-8", "ignore") if is_bytes else body
+            if not isinstance(text, str) or '"after"' not in text:
+                return request
+            try:
+                payload = json.loads(text)
+            except (ValueError, TypeError):  # fmt: skip
+                return request
+            variables = payload.get("variables")
+            if isinstance(variables, dict) and variables.get("after") not in (None, ""):
+                variables["after"] = self.SYNTHETIC_CURSOR
+                new_text = json.dumps(payload)
+                request.body = new_text.encode("utf-8") if is_bytes else new_text
+            return request
+
+        def before_record_response(self, response: dict) -> dict:
+            """Normalise ``pageInfo.endCursor`` in every connection of the response body."""
+            body = response.get("body")
+            if not isinstance(body, dict) or "string" not in body:
+                return response
+            raw = body["string"]
+            is_bytes = isinstance(raw, bytes)
+            text = raw.decode("utf-8", "ignore") if is_bytes else raw
+            if not isinstance(text, str) or '"endCursor"' not in text:
+                return response
+            try:
+                payload = json.loads(text)
+            except (ValueError, TypeError):  # fmt: skip
+                return response
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                return response
+            changed = False
+            for obj in data.values():
+                if not isinstance(obj, dict):
+                    continue
+                page_info = obj.get("pageInfo")
+                if isinstance(page_info, dict) and page_info.get("endCursor"):
+                    self._cursor_counter += 1
+                    page_info["endCursor"] = f"{self.SYNTHETIC_CURSOR}-{self._cursor_counter:04d}"
+                    changed = True
+            if changed:
+                new_text = json.dumps(payload)
+                body["string"] = new_text.encode("utf-8") if is_bytes else new_text
+            return response
+
     VCR_SANITIZERS = [
         DefaultSanitizer(
             additional_sensitive_fields=[
@@ -313,6 +379,7 @@ try:
             ]
         ),
         MedalliaResponseBodySanitizer(),
+        MedalliaCursorSanitizer(),
     ]
 except ImportError:  # pragma: no cover - production image has no dev dependencies.
     VCR_SANITIZERS = []

@@ -14,16 +14,14 @@ dependencies = [
 dev = [
     "freezegun>=1.5.1",
     "keboola.datadirtest>=2.2.0",
+    # scrub_before_read (applied at record time so expected/ is synthetic, never real data)
+    # is a keboola.vcr 0.7.0 feature; datadirtest only floors it at 0.5.0, so pin it here.
+    "keboola.vcr>=0.7.0",
     "mock>=5.2.0",
     "pre-commit>=4.5.0",
     "pytest>=9.0.2",
     "ruff>=0.15.2",
-    "ty>=0.0.24",
-    # keboola.vcr 0.5.0's response-recording monkeypatch targets vcrpy's
-    # single-arg VCRHTTPResponse(recorded_response); vcrpy 8.2.0 added a positional
-    # request_url arg that breaks it ("takes 2 positional arguments but 3 given"),
-    # crashing every cassette recording. Pin to the last compatible vcrpy line.
-    "vcrpy>=8.1.1,<8.2",
+    "ty>=0.0.24"
 ]
 
 [tool.ruff]

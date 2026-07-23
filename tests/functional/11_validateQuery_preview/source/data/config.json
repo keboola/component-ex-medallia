@@ -1,0 +1,14 @@
+{
+  "action": "validateQuery",
+  "parameters": {
+    "instance_host": "example.medallia.com",
+    "api_host": "example.apis.medallia.com",
+    "company_name": "example",
+    "client_id": "DUMMY_CLIENT_ID",
+    "#client_secret": "DUMMY_CLIENT_SECRET",
+    "mode": "raw",
+    "output_table": "raw_feedback",
+    "page_size": 25,
+    "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
+  }
+}

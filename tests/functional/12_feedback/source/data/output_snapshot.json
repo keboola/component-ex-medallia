@@ -1,0 +1,24 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "feedback.csv": {
+      "columns": [
+        "id",
+        "a_customerid",
+        "e_accepteddate",
+        "a_initial_finish_timestamp"
+      ],
+      "hash": "sha256:d6ed9c9e7ec0014ea64228bb2b61db0ae13207f1c48e0d119eb38bd1cc8ac4db",
+      "row_count": 87,
+      "size_bytes": 4092
+    },
+    "feedback.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:13db4b92f3e69b88df32a28be4e5f59c624c5acc80adef040d8948a557f7b2db",
+      "row_count": null,
+      "size_bytes": 774
+    }
+  },
+  "version": "1.0"
+}
