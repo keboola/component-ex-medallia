@@ -253,7 +253,7 @@ class MedalliaTokenManager:
         # opaque exit code 2); fall back to the 1h default and let the token be used.
         try:
             expires_in = float(payload.get("expires_in", 3600))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):  # fmt: skip
             expires_in = 3600.0
         self._expires_at = time.time() + expires_in
 

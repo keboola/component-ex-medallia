@@ -27,7 +27,9 @@ COMPONENT_SCRIPT = str(Path(__file__).parent.parent / "src" / "component.py")
 
 _ALL_CASES = get_test_cases(FUNCTIONAL_DIR) if Path(FUNCTIONAL_DIR).exists() else []
 
-_NO_CASSETTES_REASON = "No VCR functional cases present — record them from tests/setup/*.json (see tests/README.md)."
+_NO_CASSETTES_REASON = (
+    "No VCR functional cases present — record them from tests/setup/*.json with `pytest --vcr-record`."
+)
 
 
 def _parametrized_cases() -> list:

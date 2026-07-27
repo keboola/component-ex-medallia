@@ -175,7 +175,9 @@ class RowConfiguration(BaseModel):
                 f"output_table '{value}' is not a valid table name; use letters, digits, underscores "
                 "or hyphens only (no path separators)."
             )
-        return value
+        # Return the stripped, canonical name so surrounding whitespace never leaks into the
+        # output table name / CSV filename (the validated value and the stored value must agree).
+        return name
 
     @field_validator("fields")
     @classmethod

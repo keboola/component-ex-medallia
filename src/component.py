@@ -1098,7 +1098,10 @@ if __name__ == "__main__":
         # this triggers the run method by default and is controlled by the configuration.action parameter
         comp.execute_action()
     except UserException as exc:
-        logging.exception(exc)
+        # exit 1 is a user-actionable error: log the message only. A full traceback adds noise for
+        # the user and embeds absolute local file paths into the job log; the unexpected-error
+        # branch below keeps the traceback, where it aids debugging.
+        logging.error(str(exc))
         exit(1)
     except Exception as exc:
         logging.exception(exc)
