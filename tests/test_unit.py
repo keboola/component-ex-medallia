@@ -1205,6 +1205,14 @@ class TestMedalliaTokenManager:
         with pytest.raises(MedalliaClientError):
             manager.get_token()
 
+    def test_non_numeric_expires_in_falls_back_and_does_not_crash(self):
+        # A non-numeric expires_in must not raise an uncaught ValueError (that would be exit 2).
+        session = _StubSession(
+            [_StubResponse(status_code=200, json_data={"access_token": "tok-1", "expires_in": "not-a-number"})]
+        )
+        manager = MedalliaTokenManager("acme.medallia.com", "acme", "cid", "secret", session=session)
+        assert manager.get_token() == "tok-1"
+
 
 # ==================================================================================================
 # 12. raw-mode validation
@@ -1503,6 +1511,15 @@ class TestFieldCatalogPagination:
         client = _PagingMetadataClient([{"fields": {"nodes": [_fld("a_1")], "pageInfo": {"hasNextPage": False}}}])
         assert [d["id"] for d in catalog.fetch(client)] == ["a_1"]  # ty: ignore[invalid-argument-type]
         assert len(client.calls) == 1
+
+    def test_empty_end_cursor_stops_instead_of_refetching(self):
+        # hasNextPage true but endCursor empty must NOT re-fetch the first page up to the ceiling.
+        catalog = _METADATA_CATALOGS["fields"]
+        client = _PagingMetadataClient(
+            [{"fields": {"nodes": [_fld("a_1")], "pageInfo": {"hasNextPage": True, "endCursor": ""}}}]
+        )
+        assert [d["id"] for d in catalog.fetch(client)] == ["a_1"]  # ty: ignore[invalid-argument-type]
+        assert len(client.calls) == 1  # stopped, did not loop
 
 
 class TestFieldPickerUsageScope:

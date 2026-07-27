@@ -443,6 +443,11 @@ class _MetadataCatalog:
             if not page.get("hasNextPage"):
                 break
             after = page.get("endCursor")
+            if not after:
+                # Mirror MedalliaClient.paginate: a truthy hasNextPage with an empty endCursor
+                # would re-fetch the same first page up to _MAX_METADATA_PAGES times. Stop instead.
+                logging.warning("%s: hasNextPage is true but endCursor is empty; stopping to avoid a loop.", self.node)
+                break
         return out
 
 
@@ -748,8 +753,10 @@ class Component(ComponentBase):
         ``customerSchema`` for ``customers`` (shape b), ``eventSchemas`` / ``programRecordSchemas``
         for event / program-record connections — its ``dataType`` definitions are merged in and
         win over the bare scalar type, so ``listFields``/``listDateFields`` surface fields by name
-        and ``_base_type`` types them from ``dataType``. A catalogue-fetch failure degrades to the
-        scalar seed (columns default to STRING) rather than aborting the run.
+        and ``_base_type`` types them from ``dataType``. A TRANSIENT catalogue-fetch failure
+        (``MedalliaClientError``) degrades to the scalar seed (columns default to STRING) rather
+        than aborting; a user-actionable failure (``UserException`` — e.g. an invalid object) still
+        surfaces as exit 1 so a real misconfiguration is not silently masked as untyped columns.
         """
         metadata: dict[str, dict[str, Any]] = {
             name: {"scalar_type": scalar_type} for name, scalar_type in shape.scalar_fields.items()
@@ -791,6 +798,10 @@ class Component(ComponentBase):
         field_meta: dict,
         incremental: bool,
     ) -> TableDefinition:
+        # Dedup caveat: id-less objects key on a whole-row hash, so an UPDATED re-fetched record
+        # hashes differently and is inserted as a new row rather than upserted. Acceptable here —
+        # id-less objects are append-mostly and the incremental window bounds re-reads — but it is
+        # why an object WITH an id is always preferred.
         primary_key = ["id"] if shape.has_id else ["_row_hash"]
         schema = {name: self._column_definition(name, shape, field_meta) for name in fieldnames}
         return self.create_out_table_definition(

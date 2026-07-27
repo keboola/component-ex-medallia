@@ -92,9 +92,9 @@
     "output_table": {
       "type": "string",
       "title": "Storage Table Name",
-      "description": "Optional. Defaults to the data object name.",
+      "description": "Structured mode: optional (defaults to the data object name). Raw mode: REQUIRED.",
       "options": {
-        "tooltip": "Optional. Name of the output table; defaults to the data object name. Set a distinct name to extract the same object multiple ways in one configuration."
+        "tooltip": "Name of the output table. In structured mode it is optional and defaults to the data object name; in RAW mode it is REQUIRED — there is no data object to derive the name from, so the run fails without it. Set a distinct name to extract the same object multiple ways in one configuration."
       },
       "propertyOrder": 50
     },
@@ -189,7 +189,7 @@
       "minimum": 25,
       "maximum": 500,
       "options": {
-        "tooltip": "The `first` argument sent on every query (default 100, allowed 25–500). Each page is parsed in memory before rows stream to disk, so page_size × number of selected fields drives peak memory — with a wide field selection, keep this low (e.g. 50–100) to avoid out-of-memory errors. Values outside 25–500 are clamped."
+        "tooltip": "The `first` argument sent on every query (default 100, allowed 25–500). Each page is parsed in memory before rows stream to disk, so page_size × number of selected fields drives peak memory — with a wide field selection, keep this low (e.g. 50–100) to avoid out-of-memory errors. The UI enforces the 25–500 range; a value set outside it via the API is clamped into range."
       },
       "propertyOrder": 110
     }

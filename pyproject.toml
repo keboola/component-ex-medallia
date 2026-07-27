@@ -17,7 +17,6 @@ dev = [
     # scrub_before_read (applied at record time so expected/ is synthetic, never real data)
     # is a keboola.vcr 0.7.0 feature; datadirtest only floors it at 0.5.0, so pin it here.
     "keboola.vcr>=0.7.0",
-    "mock>=5.2.0",
     "pre-commit>=4.5.0",
     "pytest>=9.0.2",
     "ruff>=0.15.2",

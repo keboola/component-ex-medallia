@@ -249,7 +249,13 @@ class MedalliaTokenManager:
         if not token:
             raise MedalliaClientError("Medallia token response did not contain an access_token.")
         self._access_token = token
-        self._expires_at = time.time() + float(payload.get("expires_in", 3600))
+        # A non-numeric expires_in must not raise (an uncaught ValueError would surface as the
+        # opaque exit code 2); fall back to the 1h default and let the token be used.
+        try:
+            expires_in = float(payload.get("expires_in", 3600))
+        except TypeError, ValueError:
+            expires_in = 3600.0
+        self._expires_at = time.time() + expires_in
 
 
 # --------------------------------------------------------------------------------------------
