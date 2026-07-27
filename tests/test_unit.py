@@ -1506,34 +1506,55 @@ class TestFieldCatalogPagination:
 
 
 class TestFieldPickerUsageScope:
-    """#3 — the picker hides fields not used on any program (they'd be empty columns)."""
+    """The Fields picker offers EVERY field by default; ``only_program_fields`` opts into the
+    usedOnPrograms scope.
 
-    def _feedback_component(self, monkeypatch, client):
-        row = RowConfiguration(data_object="feedback", mode="structured")
+    Regression: usedOnPrograms reflects survey-program usage, so record-attribute fields (a_*,
+    and most k_/r_/u_) are always empty for it yet carry data on every record. The DEFAULT picker
+    (toggle off) must offer them; turning the toggle ON may hide them by design.
+    """
+
+    def _feedback_component(self, monkeypatch, client, only_program_fields=False):
+        row = RowConfiguration(data_object="feedback", mode="structured", only_program_fields=only_program_fields)
         shape = ObjectShape("feedback", SHAPE_FIELDDATA, True, True, True)
         return _bare_component(monkeypatch, row, client, shape)
 
-    def test_only_used_fields_offered(self, monkeypatch):
-        client = _PagingMetadataClient(
+    def _mixed_client(self):
+        # a_customerid + k_unused report usedOnPrograms=[]; only e_used is on a program.
+        return _PagingMetadataClient(
             [
                 {
                     "fields": {
-                        "nodes": [_fld("a_used", used=["p1"]), _fld("k_unused", used=[]), _fld("e_used", used=["p2"])],
+                        "nodes": [
+                            _fld("a_customerid", used=[]),
+                            _fld("k_unused", used=[]),
+                            _fld("e_used", used=["p2"]),
+                        ],
                         "pageInfo": {"hasNextPage": False},
                     }
                 }
             ]
         )
-        comp = self._feedback_component(monkeypatch, client)
-        elements = Component.list_fields.__wrapped__(comp)
-        assert {e.value for e in elements} == {"a_used", "e_used"}  # k_unused (no programs) hidden
 
-    def test_fallback_shows_all_when_usage_not_reported(self, monkeypatch):
-        # No field carries usedOnPrograms → keep them all (never render an empty picker).
+    def test_default_offers_all_fields_including_empty_used_on_programs(self, monkeypatch):
+        # Customer-reported bug: a_* attributes report usedOnPrograms=[] but are populated; the
+        # default picker (toggle OFF) must still offer them.
+        comp = self._feedback_component(monkeypatch, self._mixed_client(), only_program_fields=False)
+        elements = Component.list_fields.__wrapped__(comp)
+        assert {e.value for e in elements} == {"a_customerid", "k_unused", "e_used"}
+
+    def test_toggle_on_scopes_to_program_fields(self, monkeypatch):
+        # Opt-in trim: only fields with a non-empty usedOnPrograms survive.
+        comp = self._feedback_component(monkeypatch, self._mixed_client(), only_program_fields=True)
+        elements = Component.list_fields.__wrapped__(comp)
+        assert {e.value for e in elements} == {"e_used"}
+
+    def test_toggle_on_falls_back_to_all_when_usage_not_reported(self, monkeypatch):
+        # Toggle ON but no field reports usedOnPrograms at all → keep them all (never empty picker).
         client = _PagingMetadataClient(
             [{"fields": {"nodes": [_fld("a_1"), _fld("e_2")], "pageInfo": {"hasNextPage": False}}}]
         )
-        comp = self._feedback_component(monkeypatch, client)
+        comp = self._feedback_component(monkeypatch, client, only_program_fields=True)
         elements = Component.list_fields.__wrapped__(comp)
         assert {e.value for e in elements} == {"a_1", "e_2"}
 

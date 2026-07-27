@@ -119,6 +119,11 @@ class RowConfiguration(BaseModel):
     # Structured mode.
     data_object: str = Field(default="", description="Medallia connection to extract (structured mode).")
     fields: list[str] = Field(default_factory=list, description="Field IDs to extract; empty ⇒ all scalar fields.")
+    only_program_fields: bool = Field(
+        default=False,
+        description="listFields picker scope: True offers only fields used on a survey program "
+        "(usedOnPrograms); False (default) offers every field in the object's catalogue. Picker-only.",
+    )
     load_type: LoadType = LoadType.incremental_load
     incremental_field: str = Field(default="", description="Date/int field ID driving the incremental watermark.")
     initial_start: str = Field(

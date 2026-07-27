@@ -35,6 +35,20 @@
       },
       "propertyOrder": 20
     },
+    "only_program_fields": {
+      "type": "boolean",
+      "title": "Only fields used on a survey program",
+      "description": "Trim the Fields list to fields collected on a Medallia survey program.",
+      "format": "checkbox",
+      "default": false,
+      "options": {
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "OFF (default): the Fields picker lists every field in the object's catalogue. ON: it lists only fields Medallia reports as used on at least one survey program (the `usedOnPrograms` attribute). Turning this ON hides record-attribute fields — e.g. the whole `a_*` customer/attribute family and most `k_`/`r_`/`u_` fields — because those are populated on every record but are not tied to a survey program. Leave it OFF if you need attribute fields; turn it ON to cut a large catalogue down to just survey-collected fields. Toggling it reloads the Fields list."
+      },
+      "propertyOrder": 25
+    },
     "fields": {
       "type": "array",
       "title": "Fields",
@@ -49,13 +63,13 @@
         "async": {
           "label": "Load Fields",
           "action": "listFields",
-          "autoload": ["data_object"],
+          "autoload": ["data_object", "only_program_fields"],
           "cache": true
         },
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "Shows field names for the chosen object; each becomes one output column. The list reloads when the object changes. Empty selects all scalar fields (for objects without a field catalogue)."
+        "tooltip": "Shows field names for the chosen object; each becomes one output column. The list reloads when the object or the 'Only fields used on a survey program' toggle changes. Empty selects all scalar fields (for objects without a field catalogue)."
       },
       "propertyOrder": 30
     },

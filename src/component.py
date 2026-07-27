@@ -1030,23 +1030,28 @@ class Component(ComponentBase):
         node = self._metadata_node(shape)
         if node is None:
             return self._scalar_field_elements(shape, date_only)
-        return self._catalog_field_elements(client, _METADATA_CATALOGS[node], date_only)
+        return self._catalog_field_elements(client, _METADATA_CATALOGS[node], date_only, row.only_program_fields)
 
     def _catalog_field_elements(
-        self, client: MedalliaClient, catalog: _MetadataCatalog, date_only: bool
+        self, client: MedalliaClient, catalog: _MetadataCatalog, date_only: bool, only_program_fields: bool
     ) -> list[SelectElement]:
         try:
             definitions = catalog.fetch(client)
         except MedalliaClientError as exc:
             raise UserException(f"Could not load Medallia fields: {exc}") from None
-        # Scope the picker to fields actually used on a program — the rest only ever produce
-        # empty columns. Only applied when usage is reported (the ``fields`` catalogue); if no
-        # field carries ``usedOnPrograms`` (other catalogues / instances that don't report it),
-        # keep them all so the picker never goes empty.
-        used = [d for d in definitions if d.get("usedOnPrograms")]
-        candidates = used or definitions
+        # By default offer EVERY field. The ``only_program_fields`` toggle re-applies the
+        # ``usedOnPrograms`` scope for users who want a shorter list. That attribute reflects
+        # *survey-program* usage, NOT whether a field carries data: record-attribute fields (the
+        # whole ``a_*`` family, plus most ``k_``/``r_``/``u_``) are always ``usedOnPrograms: []``
+        # yet populated on every record, so the scope HIDES them — hence it is opt-in and off by
+        # default (filtering by it silently hid ~77% of the reference instance's catalogue,
+        # including all 790 ``a_*`` attributes a config had always extracted). The ``used or
+        # definitions`` fallback keeps the picker from ever going empty when usage isn't reported.
+        if only_program_fields:
+            used = [d for d in definitions if d.get("usedOnPrograms")]
+            definitions = used or definitions
         elements: list[SelectElement] = []
-        for node in candidates:
+        for node in definitions:
             field_id = node.get("id")
             if not field_id:
                 continue
