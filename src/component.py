@@ -1051,13 +1051,14 @@ class Component(ComponentBase):
         except MedalliaClientError as exc:
             raise UserException(f"Could not load Medallia fields: {exc}") from None
         # By default offer EVERY field. The ``only_program_fields`` toggle re-applies the
-        # ``usedOnPrograms`` scope for users who want a shorter list. That attribute reflects
-        # *survey-program* usage, NOT whether a field carries data: record-attribute fields (the
-        # whole ``a_*`` family, plus most ``k_``/``r_``/``u_``) are always ``usedOnPrograms: []``
-        # yet populated on every record, so the scope HIDES them — hence it is opt-in and off by
-        # default (filtering by it silently hid ~77% of the reference instance's catalogue,
-        # including all 790 ``a_*`` attributes a config had always extracted). The ``used or
-        # definitions`` fallback keeps the picker from ever going empty when usage isn't reported.
+        # ``usedOnPrograms`` scope for users who want a shorter list. ``usedOnPrograms`` reflects
+        # *survey-program* usage, NOT whether a field carries data — many fields with an empty
+        # ``usedOnPrograms`` are still populated on every record. Filtering by it is therefore
+        # lossy: on the reference instance it hid ~2600 of ~3370 fields (all 790 whose id begins
+        # ``a_``, which a config had always extracted), so the scope is opt-in and OFF by default.
+        # NOTE: field-id prefixes (``a_``/``e_``/``k_``/…) are instance/tenant naming conventions,
+        # not a reliable field-class signal — do NOT branch on them. The ``used or definitions``
+        # fallback keeps the picker from ever going empty when usage isn't reported.
         if only_program_fields:
             used = [d for d in definitions if d.get("usedOnPrograms")]
             definitions = used or definitions

@@ -45,7 +45,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "OFF (default): the Fields picker lists every field in the object's catalogue. ON: it lists only fields Medallia reports as used on at least one survey program (the `usedOnPrograms` attribute). Turning this ON hides record-attribute fields — e.g. the whole `a_*` customer/attribute family and most `k_`/`r_`/`u_` fields — because those are populated on every record but are not tied to a survey program. Leave it OFF if you need attribute fields; turn it ON to cut a large catalogue down to just survey-collected fields. Toggling it reloads the Fields list."
+        "tooltip": "OFF (default): the Fields picker lists every field in the object's catalogue. ON: it lists only fields Medallia reports as used on at least one survey program (a non-empty `usedOnPrograms`). Turning it ON hides every field with an empty `usedOnPrograms` — fields that may still be populated on records but are not tied to a survey program, which can be a large share of the catalogue. Leave it OFF (the default) if fields you expect are missing from the list; turn it ON only to trim a large catalogue down to survey-collected fields. Toggling it reloads the Fields list."
       },
       "propertyOrder": 25
     },
