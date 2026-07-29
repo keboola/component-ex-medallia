@@ -15,6 +15,7 @@ HTTP interactions are exercised via small in-memory stub sessions/token managers
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -1717,3 +1718,67 @@ class TestValidateQuery:
         two = {"feedback": {"nodes": [], "pageInfo": {}}, "customers": {"nodes": [], "pageInfo": {}}}
         with pytest.raises(UserException, match="exactly one connection"):
             Component._raw_connection(two)
+
+
+# ---------------------------------------------------------------------------------------------
+# Watermark normalisation (persisted value must match the day-granular bound format the query
+# builder emits — a DATE/DATETIME field's value carries a time part that Medallia's date filter
+# never produces itself).
+# ---------------------------------------------------------------------------------------------
+class TestNormalizeWatermark:
+    def test_int_watermark_passes_through(self):
+        assert Component._normalize_watermark(1785551000, is_int=True) == 1785551000
+
+    def test_none_passes_through(self):
+        assert Component._normalize_watermark(None, is_int=False) is None
+
+    def test_datetime_with_space_floored_to_day(self):
+        # The exact live case from the smoke config: a persisted DATETIME watermark.
+        assert Component._normalize_watermark("2026-07-26 23:30:11", is_int=False) == "2026-07-26"
+
+    def test_iso_t_and_trailing_zone_floored_to_day(self):
+        assert Component._normalize_watermark("2026-07-26T23:30:11Z", is_int=False) == "2026-07-26"
+
+    def test_date_only_string_is_unchanged(self):
+        assert Component._normalize_watermark("2026-07-26", is_int=False) == "2026-07-26"
+
+    def test_non_iso_but_parseable_is_floored(self):
+        assert Component._normalize_watermark("July 26, 2026", is_int=False) == "2026-07-26"
+
+    def test_unparseable_string_left_as_is(self):
+        # Never raise on an unexpected format — leave the value untouched rather than lose state.
+        assert Component._normalize_watermark("not-a-date", is_int=False) == "not-a-date"
+
+
+# ---------------------------------------------------------------------------------------------
+# Raw-mode empty result: a query returning zero rows is a legitimate empty result, but raw mode
+# cannot infer a schema, so it writes NOTHING and succeeds (rather than a malformed zero-column
+# table or a hard failure).
+# ---------------------------------------------------------------------------------------------
+class TestWriteRawTableEmpty:
+    @staticmethod
+    def _component(tmp_path, monkeypatch):
+        """A bare Component whose table factory writes into tmp_path (ComponentBase.__init__ and
+        its read-only ``tables_out_path`` bypassed)."""
+        comp = object.__new__(Component)
+        manifests: list = []
+
+        def _make_table(name, **kwargs):
+            return SimpleNamespace(full_path=str(tmp_path / name), **kwargs)
+
+        monkeypatch.setattr(comp, "create_out_table_definition", _make_table)
+        monkeypatch.setattr(comp, "write_manifest", lambda table: manifests.append(table))
+        return comp, manifests
+
+    def test_zero_rows_writes_no_file_and_no_manifest_and_succeeds(self, tmp_path, monkeypatch):
+        comp, manifests = self._component(tmp_path, monkeypatch)
+        comp._write_raw_table("empty_out.csv", iter([]))
+        assert manifests == []  # no manifest written
+        assert not (tmp_path / "empty_out.csv").exists()  # the empty CSV was removed
+        assert list(tmp_path.iterdir()) == []  # Storage left completely untouched
+
+    def test_rows_still_write_table_and_manifest(self, tmp_path, monkeypatch):
+        comp, manifests = self._component(tmp_path, monkeypatch)
+        comp._write_raw_table("out.csv", iter([{"id": "1", "score": {"value": "9"}}]))
+        assert len(manifests) == 1  # positive control: a non-empty result still writes
+        assert (tmp_path / "out.csv").exists()

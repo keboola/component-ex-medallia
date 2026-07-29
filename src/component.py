@@ -528,8 +528,17 @@ class Component(ComponentBase):
             table.full_path, fieldnames, nodes, shape.has_id, row.incremental_field, is_int, lower_bound
         )
         self.write_manifest(table)
-        # Persist the watermark ONLY for incremental loads; a full load re-applies the Start Date.
-        self._save_incremental_state(row, max_watermark if row.incremental else None)
+        # Persist the watermark ONLY for an incremental load whose date window was actually applied.
+        # An unbounded load (no Date Field, or an object with no filter/orderBy support) advances a
+        # watermark the next run never reads back — persisting it would only leave dead state. A full
+        # load re-applies the Start Date each run and never resumes, so it persists nothing either.
+        watermark: int | str | None = None
+        if row.incremental:
+            if windowed:
+                watermark = self._normalize_watermark(max_watermark, is_int)
+            else:
+                logging.info("Load ran unbounded (no date window applied); not persisting a watermark.")
+        self._save_incremental_state(row, watermark)
 
     def _run_raw(self, client: MedalliaClient, row: RowConfiguration) -> None:
         if not row.raw_query.strip():
@@ -720,6 +729,29 @@ class Component(ComponentBase):
         now = datetime.now(tz=UTC)
         return int(now.timestamp()) if is_int else now.strftime("%Y-%m-%d")
 
+    @staticmethod
+    def _normalize_watermark(value: int | str | None, is_int: bool) -> int | str | None:
+        """Floor a DATE/DATETIME watermark to the day granularity the query bounds use.
+
+        Medallia returns a date/datetime field's value with a time part (e.g. ``2026-07-26
+        23:30:11``), but every bound the component emits is a day-granular ``YYYY-MM-DD`` string
+        (``_resolve_initial_start`` / ``_upper_bound`` — Medallia's date filter is day-granular).
+        Persisting the raw value would feed a full timestamp straight back into ``filter {gte: …}``
+        on the next run, a format nothing else produces. Floor it to the resolved day so run 2
+        sends the same shape as run 1; ``gte`` at day-start only widens the re-read window (the
+        upsert is idempotent), never narrows it, so no rows are missed. INT watermarks and ``None``
+        pass through untouched.
+        """
+        if is_int or value is None:
+            return value
+        text = str(value).strip()
+        if not text or _DATE_RE.match(text):
+            return value
+        if _DATETIME_RE.match(text):
+            return text[:10]
+        parsed = dateparser.parse(text, settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False})
+        return parsed.strftime("%Y-%m-%d") if parsed else text
+
     def _save_incremental_state(self, row: RowConfiguration, watermark: int | str | None) -> None:
         if row.incremental_field and watermark is not None:
             self.write_state_file({STATE_LAST_INCREMENTAL_VALUE: watermark})
@@ -877,7 +909,14 @@ class Component(ComponentBase):
         return watermark
 
     def _write_raw_table(self, table_name: str, nodes) -> None:
-        """Write raw-mode nodes: generic flatten, id/row-hash PK, full load, no state."""
+        """Write raw-mode nodes: generic flatten, id/row-hash PK, full load, no state.
+
+        A raw query returning zero rows is a legitimate empty result, but raw mode cannot infer a
+        column set without at least one row. Rather than emit a zero-column, no-primary-key table
+        (a malformed manifest Storage would reject or import as broken), the run removes the empty
+        CSV, writes no manifest, and finishes successfully — the same "success, nothing written"
+        outcome structured mode gives for an empty window, instead of a hard failure.
+        """
         first_table = self.create_out_table_definition(table_name)
         fieldnames: list[str] | None = None
         has_id = False
@@ -898,9 +937,19 @@ class Component(ComponentBase):
                 writer.writerow(row)
                 record_count += 1
         if fieldnames is None:
-            logging.warning("Raw query returned no rows; wrote an empty table for %s.", table_name)
-            fieldnames = []
-        primary_key = ["id"] if has_id else (["_row_hash"] if fieldnames else [])
+            # No rows → no inferable schema. Drop the empty file the writer opened and write no
+            # manifest, so Storage is left untouched and the run still succeeds.
+            try:
+                os.remove(first_table.full_path)
+            except OSError:
+                pass
+            logging.warning(
+                "Raw query returned no rows; nothing was written for '%s' (raw mode cannot infer a "
+                "table schema without at least one row).",
+                table_name,
+            )
+            return
+        primary_key = ["id"] if has_id else ["_row_hash"]
         schema = {
             name: ColumnDefinition(
                 data_types=BaseType.string(),

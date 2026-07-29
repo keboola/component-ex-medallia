@@ -40,7 +40,6 @@
       "title": "Only fields used on a survey program",
       "description": "Trim the Fields list to fields collected on a Medallia survey program.",
       "format": "checkbox",
-      "default": false,
       "options": {
         "dependencies": {
           "mode": "structured"
@@ -115,16 +114,15 @@
     "load_type": {
       "type": "string",
       "title": "Load Type",
-      "description": "Write mode: Incremental upserts by primary key; Full Load overwrites the table.",
+      "description": "Write mode: Incremental upserts by primary key; Full Load overwrites the table. Defaults to Incremental Load when left unset.",
       "enum": ["incremental_load", "full_load"],
       "options": {
         "enum_titles": ["Incremental Load", "Full Load"],
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "How the table is written: Incremental Load keeps a watermark and upserts rows by primary key (adds/updates); Full Load overwrites the whole table each run. Use the Date Field + Start Date to bound how far back either load reaches — this is NOT the same as load type."
+        "tooltip": "How the table is written: Incremental Load keeps a watermark and upserts rows by primary key (adds/updates); Full Load overwrites the whole table each run. Use the Date Field + Start Date to bound how far back either load reaches — this is NOT the same as load type. Left unset it behaves as Incremental Load."
       },
-      "default": "incremental_load",
       "propertyOrder": 70
     },
     "incremental_field": {
