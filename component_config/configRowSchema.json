@@ -121,7 +121,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "How the table is written: Incremental Load keeps a watermark and upserts rows by primary key (adds/updates); Full Load overwrites the whole table each run. Use the Date Field + Start Date to bound how far back either load reaches — this is NOT the same as load type. Left unset it behaves as Incremental Load."
+        "tooltip": "How the table is written. **Incremental Load** upserts rows by primary key (adds new rows, updates changed ones) and keeps a watermark on the Date Field: the first run reads from the Start Date, then each later run automatically resumes from the highest Date Field value seen so far — so the watermark, not the Start Date, sets how far back later runs reach. **Full Load** re-reads the whole window and overwrites the entire table every run. The Date Field, Start Date and End Date bound the extraction window, which is separate from the write mode chosen here. Left unset, behaves as Incremental Load."
       },
       "propertyOrder": 70
     },
@@ -175,7 +175,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "A Medallia filter tree (JSON), AND-joined with the incremental watermark. A leaf clause is {\"fieldIds\": [\"<field id>\"], \"<op>\": <value>} where <op> is one of eq, in, gt, gte, lt, lte, isNull; combine leaves with and / or / not. Example: {\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}. Field ids come from the Load Fields picker. Full grammar: Medallia Query API 'Filter and sort' docs (see the component's Documentation link). Leave empty for no extra filtering."
+        "tooltip": "A Medallia filter tree (JSON), AND-joined with the incremental watermark. A leaf clause is `{\"fieldIds\": [\"FIELD_ID\"], \"OP\": VALUE}`, where `OP` is one of `eq`, `in`, `gt`, `gte`, `lt`, `lte`, `isNull`; combine leaves with `and` / `or` / `not`. Example: `{\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}`. Field ids come from the Load Fields picker. Full grammar: [Medallia Query API — Filter and sort data](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-and-sort-data). Leave empty for no extra filtering."
       },
       "propertyOrder": 100
     },
