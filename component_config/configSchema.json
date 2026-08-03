@@ -12,42 +12,57 @@
     "instance_host": {
       "type": "string",
       "title": "Instance Host",
-      "description": "Reporting instance host used for the OAuth token endpoint.",
+      "description": "The address of your instance, without https://",
       "propertyOrder": 10,
       "options": {
-        "tooltip": "The per-instance reporting host, e.g. `mycompany.medallia.com`. The token endpoint is `https://<instance host>/oauth/<company name>/token`. Ask your Medallia administrator if unsure."
+        "inputAttributes": {
+          "placeholder": "mycompany.medallia.com"
+        },
+        "tooltip": "The address you use to reach Medallia — for example `mycompany.medallia.com` (leave out `https://`). Your Medallia administrator can confirm it if you're unsure."
       }
     },
     "company_name": {
       "type": "string",
       "title": "Company Name",
-      "description": "The company/tenant segment of the OAuth token path.",
+      "description": "Your company (account) name",
       "propertyOrder": 20,
       "options": {
-        "tooltip": "The `<companyName>` path segment in the token URL. Some instances double the company name in the API host, so it is supplied separately and never derived automatically."
+        "inputAttributes": {
+          "placeholder": "mycompany"
+        },
+        "tooltip": "Your company (account) name, as given by your administrator — usually your organization's short name. It is entered separately because some instances spell it differently in the API address, so it can't be filled in automatically."
       }
     },
     "api_host": {
       "type": "string",
       "title": "API Host",
-      "description": "The Query API gateway host (the `.apis.medallia.com` host).",
+      "description": "The API address for your instance",
       "propertyOrder": 30,
       "options": {
-        "tooltip": "The API gateway host, e.g. `mycompany.apis.medallia.com`. Query requests go to `https://<API host>/data/v0/query`. Sandbox hosts differ; supply the exact host issued for your instance."
+        "inputAttributes": {
+          "placeholder": "mycompany.apis.medallia.com"
+        },
+        "tooltip": "The address that serves your data — for example `mycompany.apis.medallia.com`. It is different from the Instance Host above, and test/sandbox instances use a different one, so enter exactly the address your administrator gives you."
       }
     },
     "client_id": {
       "type": "string",
       "title": "Client ID",
-      "description": "OAuth 2.0 client ID issued by your Medallia administrator.",
-      "propertyOrder": 40
+      "description": "The Client ID from your API credentials",
+      "propertyOrder": 40,
+      "options": {
+        "tooltip": "Part of the API credentials your Medallia administrator creates for you (sometimes called an app or integration key)."
+      }
     },
     "#client_secret": {
       "type": "string",
       "title": "Client Secret",
       "format": "password",
-      "description": "OAuth 2.0 client secret issued by your Medallia administrator.",
-      "propertyOrder": 50
+      "description": "The Client Secret that pairs with the Client ID",
+      "propertyOrder": 50,
+      "options": {
+        "tooltip": "The secret that goes with the Client ID — treat it like a password. Your Medallia administrator issues it, and it is stored encrypted."
+      }
     },
     "test_connection": {
       "type": "button",

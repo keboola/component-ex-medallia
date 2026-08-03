@@ -5,11 +5,11 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "Choose a guided object or write a raw GraphQL query.",
+      "description": "Pick an object to extract, or write your own query",
       "enum": ["structured", "raw"],
       "options": {
         "enum_titles": ["Guided (pick an object)", "Raw GraphQL query"],
-        "tooltip": "Guided mode extracts one Medallia connection with a picked field set and optional incremental load. Raw mode runs a GraphQL query you author (always a full load)."
+        "tooltip": "Guided mode extracts one object with the fields you pick, and can load only new records. Raw mode runs a GraphQL query you write yourself (always loads everything)."
       },
       "default": "structured",
       "propertyOrder": 10
@@ -17,7 +17,7 @@
     "data_object": {
       "type": "string",
       "title": "Data Object",
-      "description": "Medallia connection to extract into one table.",
+      "description": "The object to extract into one table",
       "format": "select",
       "enum": [],
       "options": {
@@ -31,27 +31,27 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "Auto-populated from the instance schema. If introspection is disabled you can type an object name manually (e.g. feedback, customers, programs)."
+        "tooltip": "The list is loaded from your instance. If it stays empty, your instance blocks automatic discovery — type the object name manually (e.g. `feedback`, `customers`, `programs`)."
       },
       "propertyOrder": 20
     },
     "only_program_fields": {
       "type": "boolean",
       "title": "Only fields used on a survey program",
-      "description": "Trim the Fields list to fields collected on a Medallia survey program.",
+      "description": "Show only fields collected on a survey program",
       "format": "checkbox",
       "options": {
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "OFF (default): the Fields picker lists every field in the object's catalogue. ON: it lists only fields Medallia reports as used on at least one survey program (a non-empty `usedOnPrograms`). Turning it ON hides every field with an empty `usedOnPrograms` — fields that may still be populated on records but are not tied to a survey program, which can be a large share of the catalogue. Leave it OFF (the default) if fields you expect are missing from the list; turn it ON only to trim a large catalogue down to survey-collected fields. Toggling it reloads the Fields list."
+        "tooltip": "Off (default): the Fields list shows every field available for this object. On: it shows only fields tied to at least one survey program, which can be a much shorter list. If a field you expect is missing, leave this off. Changing it reloads the Fields list."
       },
       "propertyOrder": 25
     },
     "fields": {
       "type": "array",
       "title": "Fields",
-      "description": "Fields to extract; leave empty to take all scalar fields.",
+      "description": "The fields to extract; leave empty to take all of them",
       "format": "select",
       "uniqueItems": true,
       "items": {
@@ -68,7 +68,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "Shows field names for the chosen object; each becomes one output column. The list reloads when the object or the 'Only fields used on a survey program' toggle changes. Empty selects all scalar fields (for objects without a field catalogue)."
+        "tooltip": "Each field you pick becomes one column in the output table. The list reloads when you change the object or the toggle above. Leave empty to take every available field."
       },
       "propertyOrder": 30
     },
@@ -91,9 +91,9 @@
     "output_table": {
       "type": "string",
       "title": "Storage Table Name",
-      "description": "Structured mode: optional (defaults to the data object name). Raw mode: REQUIRED.",
+      "description": "Name for the output table (required in raw mode)",
       "options": {
-        "tooltip": "Name of the output table. In structured mode it is optional and defaults to the data object name; in RAW mode it is REQUIRED — there is no data object to derive the name from, so the run fails without it. Set a distinct name to extract the same object multiple ways in one configuration."
+        "tooltip": "The name of the output table. In guided mode it is optional and defaults to the object name; in raw mode you must set it, because there is no object name to fall back on. Use different names to extract the same object several ways in one configuration."
       },
       "propertyOrder": 50
     },
@@ -121,14 +121,14 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "How the table is written. **Incremental Load** upserts rows by primary key (adds new rows, updates changed ones) and keeps a watermark on the Date Field: the first run reads from the Start Date, then each later run automatically resumes from the highest Date Field value seen so far — so the watermark, not the Start Date, sets how far back later runs reach. **Full Load** re-reads the whole window and overwrites the entire table every run. The Date Field, Start Date and End Date bound the extraction window, which is separate from the write mode chosen here. Left unset, behaves as Incremental Load."
+        "tooltip": "How the table is written. **Incremental Load** adds new rows and updates changed ones (matched by the table's primary key), and remembers the highest Date Field value it has loaded: the first run reads from the Start Date, then each later run automatically resumes from that remembered value — so it is that point, not the Start Date, that sets how far back later runs reach. **Full Load** re-reads the whole window and overwrites the entire table every run. The Date Field, Start Date and End Date set the date range; that is separate from the write mode chosen here. Left unset, behaves as Incremental Load."
       },
       "propertyOrder": 70
     },
     "incremental_field": {
       "type": "string",
       "title": "Date Field",
-      "description": "Date field the Start Date filters on (and, for incremental, the watermark).",
+      "description": "The date field used to load only new records and to apply the dates below",
       "format": "select",
       "enum": [],
       "options": {
@@ -141,32 +141,32 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "The date/datetime field (or sortable numeric timestamp) that the Start Date bounds the extraction on. Applies to both load types. For incremental loads it is also tracked as the watermark. The value format is auto-detected. Leave empty to load the whole object unbounded."
+        "tooltip": "The date field that the Start Date and End Date apply to. For an incremental load, the component also remembers the latest value it has seen and picks up from there on the next run. Leave empty to load the whole object with no date limit."
       },
       "propertyOrder": 80
     },
     "initial_start": {
       "type": "string",
       "title": "Start Date",
-      "description": "Window start / {{start_date}} placeholder value; empty = no lower bound.",
+      "description": "The earliest date to load from; empty means no start limit",
       "options": {
-        "tooltip": "Start of the extraction window. STRUCTURED mode: lower bound on the Date Field, applied to both load types (Full Load overwrites from here; Incremental seeds the first run, then resumes from the watermark; requires a Date Field). RAW mode: substituted into your query wherever you write {{start_date}}. Accepts an ISO date (e.g. 2026-01-01), epoch seconds, or a relative expression such as 'yesterday', '5 days ago', or 'last monday'. Leave empty for no lower bound."
+        "tooltip": "The start of the date range to load. In guided mode it is the earliest date pulled — for an incremental load it applies only to the first run, then the component continues from where it left off (needs a Date Field). In raw mode it replaces `{{start_date}}` in your query. Accepts a date like `2026-01-01`, a number of seconds since 1970, or words like `yesterday`, `5 days ago`, or `last monday`. Leave empty for no start limit."
       },
       "propertyOrder": 90
     },
     "end_date": {
       "type": "string",
       "title": "End Date",
-      "description": "Window end / {{end_date}} placeholder value; empty = now.",
+      "description": "The latest date to load up to; empty means up to now",
       "options": {
-        "tooltip": "End of the extraction window (inclusive of the given day). STRUCTURED mode: upper bound on the Date Field for both load types; empty means up to now. RAW mode: substituted wherever you write {{end_date}}. Accepts an ISO date, epoch seconds, or a relative expression such as 'yesterday' or '5 days ago'."
+        "tooltip": "The end of the date range to load (that whole day is included). In guided mode it is the latest date pulled; empty means up to now. In raw mode it replaces `{{end_date}}` in your query. Accepts a date like `2026-01-31`, a number of seconds since 1970, or words like `yesterday`."
       },
       "propertyOrder": 95
     },
     "filters": {
       "type": "string",
       "title": "Filters",
-      "description": "Optional Medallia filter tree as JSON.",
+      "description": "Optional extra filter, written as JSON",
       "format": "editor",
       "options": {
         "editor": {
@@ -187,7 +187,7 @@
       "minimum": 25,
       "maximum": 500,
       "options": {
-        "tooltip": "The `first` argument sent on every query (default 100, allowed 25–500). Each page is parsed in memory before rows stream to disk, so page_size × number of selected fields drives peak memory — with a wide field selection, keep this low (e.g. 50–100) to avoid out-of-memory errors. The UI enforces the 25–500 range; a value set outside it via the API is clamped into range."
+        "tooltip": "How many records to fetch per request (default 100, allowed 25–500). Each batch is held in memory before it is written out, so if you extract many fields at once, keep this lower (e.g. 50–100) to avoid running out of memory. Values outside 25–500 are adjusted into range."
       },
       "propertyOrder": 110
     }
