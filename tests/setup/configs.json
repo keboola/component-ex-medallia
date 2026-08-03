@@ -92,7 +92,10 @@
         "data_object": "feedback",
         "page_size": 25,
         "load_type": "incremental_load",
-        "fields": ["a_customerid", "e_accepteddate"],
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
         "incremental_field": "a_initial_finish_timestamp",
         "initial_start": "1781542800",
         "end_date": "1781550000"
@@ -114,7 +117,10 @@
         "data_object": "invitations",
         "page_size": 25,
         "load_type": "incremental_load",
-        "fields": ["a_customerid", "e_accepteddate"],
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
         "incremental_field": "a_initial_finish_timestamp",
         "initial_start": "1781542800",
         "end_date": "1781550000"
@@ -136,7 +142,11 @@
         "data_object": "invitations",
         "page_size": 25,
         "load_type": "full_load",
-        "fields": ["a_customerid", "e_accepteddate", "e_status"],
+        "fields": [
+          "a_customerid",
+          "e_accepteddate",
+          "e_status"
+        ],
         "incremental_field": "a_initial_finish_timestamp",
         "initial_start": "1781542800",
         "end_date": "1781550000"
@@ -158,6 +168,118 @@
         "output_table": "raw_feedback",
         "page_size": 25,
         "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after, filter: {fieldIds: [\"a_initial_finish_timestamp\"], gte: \"1781542800\", lt: \"1781550000\"}) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
+      }
+    }
+  },
+  {
+    "name": "16_listFields_customers",
+    "description": "listFields sync action for customers (shape b, customerSchema/ContactSchema).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "customers"
+      }
+    }
+  },
+  {
+    "name": "17_listFields_invitations",
+    "description": "listFields sync action for invitations (shape a, fieldData \u2014 global fields catalogue).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "invitations"
+      }
+    }
+  },
+  {
+    "name": "18_listFields_missingSocialURLs",
+    "description": "listFields sync action for missingSocialURLs (captures whatever field listing this object returns).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "missingSocialURLs"
+      }
+    }
+  },
+  {
+    "name": "19_listFields_programs",
+    "description": "listFields sync action for programs (shape c scalar \u2014 node scalars, no catalogue).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "programs"
+      }
+    }
+  },
+  {
+    "name": "20_listFields_socialURLs",
+    "description": "listFields sync action for socialURLs (id-less object \u2014 node scalars).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "socialURLs"
+      }
+    }
+  },
+  {
+    "name": "21_listFields_socialUrlsHealth",
+    "description": "listFields sync action for socialUrlsHealth (captures whatever field listing this object returns).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "socialUrlsHealth"
+      }
+    }
+  },
+  {
+    "name": "22_listFields_unitWarnings",
+    "description": "listFields sync action for unitWarnings (captures whatever field listing this object returns).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "unitWarnings"
       }
     }
   }

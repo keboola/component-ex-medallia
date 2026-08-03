@@ -1393,19 +1393,66 @@ class _StubMetadataClient:
         return self._response
 
 
-# customerSchema (ContactSchema) metadata — {id, name, dataType, sortable, multivalued}. Covers a
-# DATE, a DATETIME, a sortable epoch-style INT (the incremental candidate), a NON-sortable INT
-# (must NOT surface as a date field) and plain string/email fields.
+# customerSchema (ContactSchema) metadata — ContactAttribute nodes under the NESTED ``attributes``
+# Relay connection: key/name/type/containsPii/isKey/isIndexed (NOT the Field type's
+# id/name/dataType/sortable/multivalued). The component normalises key→id, type→dataType,
+# isIndexed→sortable. Covers a DATE, a DATETIME, an indexed INT (incremental candidate), a
+# NON-indexed INT (must NOT surface as a date field) and plain string/email attributes.
 _CUSTOMER_SCHEMA_RESPONSE = {
     "customerSchema": {
-        "fields": [
-            {"id": "c_email", "name": "Email", "dataType": "EMAIL", "sortable": False, "multivalued": False},
-            {"id": "c_created", "name": "Created Date", "dataType": "DATE", "sortable": True, "multivalued": False},
-            {"id": "c_lastseen", "name": "Last Seen", "dataType": "DATETIME", "sortable": True, "multivalued": False},
-            {"id": "c_loyalty", "name": "Loyalty Points", "dataType": "INT", "sortable": True, "multivalued": False},
-            {"id": "c_nps", "name": "NPS", "dataType": "INT", "sortable": False, "multivalued": False},
-            {"id": "c_name", "name": "Full Name", "dataType": "STRING", "sortable": False, "multivalued": False},
-        ]
+        "attributes": {
+            "nodes": [
+                {
+                    "key": "c_email",
+                    "name": "Email",
+                    "type": "EMAIL",
+                    "containsPii": True,
+                    "isKey": False,
+                    "isIndexed": False,
+                },
+                {
+                    "key": "c_created",
+                    "name": "Created Date",
+                    "type": "DATE",
+                    "containsPii": False,
+                    "isKey": False,
+                    "isIndexed": True,
+                },
+                {
+                    "key": "c_lastseen",
+                    "name": "Last Seen",
+                    "type": "DATETIME",
+                    "containsPii": False,
+                    "isKey": False,
+                    "isIndexed": True,
+                },
+                {
+                    "key": "c_loyalty",
+                    "name": "Loyalty Points",
+                    "type": "INT",
+                    "containsPii": False,
+                    "isKey": False,
+                    "isIndexed": True,
+                },
+                {
+                    "key": "c_nps",
+                    "name": "NPS",
+                    "type": "INT",
+                    "containsPii": False,
+                    "isKey": False,
+                    "isIndexed": False,
+                },
+                {
+                    "key": "c_name",
+                    "name": "Full Name",
+                    "type": "STRING",
+                    "containsPii": True,
+                    "isKey": True,
+                    "isIndexed": False,
+                },
+            ],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
     }
 }
 
@@ -1430,8 +1477,10 @@ class TestFieldMetadataRouting:
         shape = ObjectShape("customers", SHAPE_DATA, True, False, False, scalar_fields={"c_id": "String"})
         comp = object.__new__(Component)
         meta = comp._field_metadata(client, shape)
-        # routed to customerSchema (NOT the global `fields` catalogue)
+        # routed to customerSchema.attributes (NOT the global `fields` catalogue, and NOT the
+        # bogus customerSchema.fields the first cut queried — ContactSchema has no `fields`)
         assert "customerSchema" in client.queries[0]["query"]
+        assert "attributes" in client.queries[0]["query"]
         assert meta["c_created"]["dataType"] == "DATE"
         # introspected bare node scalar is preserved (merged, not dropped)
         assert meta["c_id"] == {"scalar_type": "String"}
@@ -1444,6 +1493,16 @@ class TestFieldMetadataRouting:
 
     def test_metadata_fetch_failure_degrades_to_scalar_seed(self):
         client = _StubMetadataClient(error=MedalliaClientError("boom"))
+        shape = ObjectShape("customers", SHAPE_DATA, True, False, False, scalar_fields={"c_id": "String"})
+        comp = object.__new__(Component)
+        meta = comp._field_metadata(client, shape)
+        assert meta == {"c_id": {"scalar_type": "String"}}
+
+    def test_metadata_catalogue_query_error_degrades_not_aborts(self):
+        # A GraphQL/validation error from the catalogue query itself (UserException) must degrade to
+        # the scalar seed, not abort the extraction — metadata only refines typing/pickers, and the
+        # object was already validated upstream. Regression guard for the customerSchema fix.
+        client = _StubMetadataClient(error=UserException("Field 'fields' in type 'ContactSchema' is undefined"))
         shape = ObjectShape("customers", SHAPE_DATA, True, False, False, scalar_fields={"c_id": "String"})
         comp = object.__new__(Component)
         meta = comp._field_metadata(client, shape)

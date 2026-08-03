@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -406,39 +407,62 @@ _FIELD_SELECTION = "id name dataType sortable multivalued usedOnPrograms { id }"
 _BASE_SELECTION = "id name dataType sortable multivalued"
 
 
+# ContactSchema (the ``customers`` object's schema, shape b) types its field definitions as
+# ContactAttribute — a DIFFERENT shape than the Field type: ``key``/``name``/``type``/``isIndexed``
+# rather than ``id``/``name``/``dataType``/``sortable``. They are reached via a NESTED Relay
+# connection (``customerSchema.attributes``, a ``ContactAttributeConnection``) — NOT the
+# ``customerSchema.fields`` list the first cut assumed (``ContactSchema`` has no ``fields``, which
+# failed live with a FieldUndefined validation error). ``_normalize_contact_attribute`` maps a node
+# onto the common definition shape the rest of the extractor keys on (``type`` shares the
+# DATE/DATETIME/… vocabulary of ``dataType``; ``isIndexed`` marks the ordered/sortable attributes).
+_CONTACT_ATTRIBUTE_SELECTION = "key name type containsPii isKey isIndexed"
+
+
+def _normalize_contact_attribute(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": node.get("key"),
+        "name": node.get("name"),
+        "dataType": node.get("type"),
+        "sortable": bool(node.get("isIndexed")),
+    }
+
+
 @dataclass(frozen=True)
 class _MetadataCatalog:
     """A field-definition metadata source (spec §6.3).
 
-    ``node`` is the root query field. A ``connection`` catalogue (``fields`` / ``eventSchemas`` /
-    ``programRecordSchemas``) is a Relay connection that is paged in full via ``pageInfo``; a
-    non-connection catalogue (``customerSchema``) is a singleton whose definitions sit under a
-    ``fields`` list. ``fetch`` returns every ``{id, name, dataType, sortable, multivalued, …}``
-    definition, paging as needed.
+    ``node`` is the root query field. Definitions live in a Relay connection paged in full via
+    ``pageInfo``: for ``fields`` / ``eventSchemas`` / ``programRecordSchemas`` ``node`` IS the
+    connection; for ``customerSchema`` the connection is a nested field (``wrapper`` =
+    ``attributes``). ``normalizer``, when set, maps each raw node onto the common
+    ``{id, name, dataType, sortable, multivalued}`` shape (ContactAttribute uses different field
+    names). ``fetch`` returns every definition, paging as needed.
     """
 
     node: str
-    connection: bool
     selection: str = _BASE_SELECTION
+    wrapper: str | None = None
+    normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+
+    def _query(self) -> str:
+        # Medallia's Relay connections type the cursor as ``ID`` (not ``String``) — verified live.
+        conn = f"(first: $first, after: $after) {{ nodes {{ {self.selection} }} pageInfo {{ hasNextPage endCursor }} }}"
+        inner = f"{self.node} {{ {self.wrapper}{conn} }}" if self.wrapper else f"{self.node}{conn}"
+        return f"query ($first: Int!, $after: ID) {{ {inner} }}"
 
     def fetch(self, client: MedalliaClient) -> list[dict[str, Any]]:
-        if not self.connection:  # singleton, e.g. customerSchema { fields { … } }
-            data = client.run_metadata_query(f"query {{ {self.node} {{ fields {{ {self.selection} }} }} }}")
-            root = data.get(self.node)
-            container = root.get("fields") if isinstance(root, dict) else None
-            return [item for item in (container or []) if isinstance(item, dict)]
-        # Medallia's Relay connections type the cursor as ``ID`` (not ``String``) — verified live.
-        query = (
-            f"query ($first: Int!, $after: ID) {{ {self.node}(first: $first, after: $after) "
-            f"{{ nodes {{ {self.selection} }} pageInfo {{ hasNextPage endCursor }} }} }}"
-        )
+        query = self._query()
         out: list[dict[str, Any]] = []
         after: str | None = None
         for _ in range(_MAX_METADATA_PAGES):
             data = client.run_metadata_query(query, variables={"first": _METADATA_PAGE_SIZE, "after": after})
-            root = data.get(self.node)
-            conn: dict[str, Any] = root if isinstance(root, dict) else {}
-            out.extend(item for item in (conn.get("nodes") or []) if isinstance(item, dict))
+            conn = data.get(self.node) if isinstance(data, dict) else None
+            if self.wrapper:
+                conn = conn.get(self.wrapper) if isinstance(conn, dict) else None
+            conn = conn if isinstance(conn, dict) else {}
+            for item in conn.get("nodes") or []:
+                if isinstance(item, dict):
+                    out.append(self.normalizer(item) if self.normalizer else item)
             page = conn.get("pageInfo") or {}
             if not page.get("hasNextPage"):
                 break
@@ -451,17 +475,21 @@ class _MetadataCatalog:
         return out
 
 
-# Field-metadata catalogues keyed by metadata-node name (spec §6.3). All expose the same
-# ``{id, name, dataType, sortable, multivalued}`` field-definition shape, so a single extractor
-# types every object. ``fields`` is the global shape-(a) catalogue (feedback / invitations) and,
-# with ``eventSchemas`` / ``programRecordSchemas``, is a Relay connection (``{nodes{…}}``);
-# ``customerSchema`` (ContactSchema) is the singleton that types the ``customers`` object
-# (shape b) and wraps its definitions in a ``fields`` list.
+# Field-metadata catalogues keyed by metadata-node name (spec §6.3). ``fields`` is the global
+# shape-(a) catalogue (feedback / invitations) and, with ``eventSchemas`` / ``programRecordSchemas``,
+# a top-level Relay connection (``{nodes{…}}``). ``customerSchema`` (ContactSchema) types the
+# ``customers`` object (shape b): its definitions are ContactAttribute nodes under a NESTED
+# connection ``attributes`` and are normalised onto the common definition shape.
 _METADATA_CATALOGS: dict[str, _MetadataCatalog] = {
-    "fields": _MetadataCatalog("fields", connection=True, selection=_FIELD_SELECTION),
-    "customerSchema": _MetadataCatalog("customerSchema", connection=False),
-    "eventSchemas": _MetadataCatalog("eventSchemas", connection=True),
-    "programRecordSchemas": _MetadataCatalog("programRecordSchemas", connection=True),
+    "fields": _MetadataCatalog("fields", selection=_FIELD_SELECTION),
+    "customerSchema": _MetadataCatalog(
+        "customerSchema",
+        selection=_CONTACT_ATTRIBUTE_SELECTION,
+        wrapper="attributes",
+        normalizer=_normalize_contact_attribute,
+    ),
+    "eventSchemas": _MetadataCatalog("eventSchemas"),
+    "programRecordSchemas": _MetadataCatalog("programRecordSchemas"),
 }
 
 # Objects whose field metadata comes from a dedicated catalogue instead of the shape-based
@@ -785,10 +813,13 @@ class Component(ComponentBase):
         ``customerSchema`` for ``customers`` (shape b), ``eventSchemas`` / ``programRecordSchemas``
         for event / program-record connections — its ``dataType`` definitions are merged in and
         win over the bare scalar type, so ``listFields``/``listDateFields`` surface fields by name
-        and ``_base_type`` types them from ``dataType``. A TRANSIENT catalogue-fetch failure
-        (``MedalliaClientError``) degrades to the scalar seed (columns default to STRING) rather
-        than aborting; a user-actionable failure (``UserException`` — e.g. an invalid object) still
-        surfaces as exit 1 so a real misconfiguration is not silently masked as untyped columns.
+        and ``_base_type`` types them from ``dataType``. Metadata is non-essential (it only refines
+        column typing and the field pickers), so a catalogue-fetch failure degrades to the scalar
+        seed (columns default to STRING) with a warning rather than aborting the extraction — both a
+        TRANSIENT failure (``MedalliaClientError``) and a ``UserException`` from the catalogue query
+        itself (e.g. a tenant whose schema exposes the catalogue differently). The object's
+        existence is already validated in ``_resolve_object`` upstream, so a genuinely invalid
+        object has failed before this point — this degrade only covers the catalogue, not the object.
         """
         metadata: dict[str, dict[str, Any]] = {
             name: {"scalar_type": scalar_type} for name, scalar_type in shape.scalar_fields.items()
@@ -799,7 +830,7 @@ class Component(ComponentBase):
         catalog = _METADATA_CATALOGS[node]
         try:
             definitions = catalog.fetch(client)
-        except MedalliaClientError as exc:
+        except (MedalliaClientError, UserException) as exc:
             logging.warning("Could not load field metadata for '%s' (%s); columns default to STRING.", shape.name, exc)
             return metadata
         for definition in definitions:  # typing uses the FULL catalogue (not usage-filtered)
