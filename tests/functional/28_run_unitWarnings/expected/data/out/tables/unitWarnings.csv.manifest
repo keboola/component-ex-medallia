@@ -1,0 +1,73 @@
+{
+  "incremental": false,
+  "write_always": false,
+  "delimiter": ",",
+  "enclosure": "\"",
+  "manifest_type": "out",
+  "has_header": true,
+  "schema": [
+    {
+      "name": "type",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "identifier",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "name",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "address",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "city",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "postalCode",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "_row_hash",
+      "data_type": {
+        "base": {
+          "type": "STRING"
+        }
+      },
+      "primary_key": true
+    }
+  ]
+}

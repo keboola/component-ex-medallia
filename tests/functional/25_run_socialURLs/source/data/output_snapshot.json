@@ -1,0 +1,24 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "socialURLs.csv": {
+      "columns": [
+        "id",
+        "textIdentifier",
+        "name",
+        "address"
+      ],
+      "hash": "sha256:667242445e3d3496c4a28771cbc2b785d8b3747f64aeef7c94c8b3b22975672c",
+      "row_count": 175,
+      "size_bytes": 14876
+    },
+    "socialURLs.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:7612141f8f17b1e723a9880ff1cbe567905e58c7ec4ffe571ce946494ec61f5d",
+      "row_count": null,
+      "size_bytes": 745
+    }
+  },
+  "version": "1.0"
+}

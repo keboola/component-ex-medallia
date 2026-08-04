@@ -39,7 +39,7 @@ from client.medallia_client import (
     resolve_object_shape,
     row_hash,
 )
-from component import _METADATA_CATALOGS, Component
+from component import _METADATA_CATALOGS, Component, MedalliaResponseBodySanitizer
 from configuration import MAX_PAGE_SIZE, MIN_PAGE_SIZE, Configuration, RowConfiguration
 
 # ==================================================================================================
@@ -1095,6 +1095,68 @@ class TestRunWrapsDataFetchError:
         monkeypatch.setattr(comp, "_run_structured", boom)
         with pytest.raises(UserException, match=r"socialURLs.*HTTP 500"):
             comp.run()
+
+
+class TestResponseBodyScrubberIdempotency:
+    """The scrub_before_read value scrubber is applied multiple times with the SAME instance
+    (pre-read + cassette copy + every replay read), so it MUST be idempotent for every node
+    shape. Regression: a drifting `_node_counter` on id-less nodes (which lack the `RESP-` id
+    sentinel) made their run cassettes non-deterministic."""
+
+    MARKER = MedalliaResponseBodySanitizer._SCRUBBED_MARKER
+
+    @staticmethod
+    def _resp(obj):
+        return {"body": {"string": json.dumps({"data": obj})}}
+
+    def _apply(self, san, response, connection, times):
+        out = []
+        for _ in range(times):
+            body = json.loads(san.before_record_response(response)["body"]["string"])
+            out.append(body["data"][connection]["nodes"][0])
+        return out
+
+    def test_id_less_node_is_idempotent_across_applies(self):
+        san = MedalliaResponseBodySanitizer()
+        resp = self._resp(
+            {
+                "socialURLs": {
+                    "nodes": [{"textIdentifier": "T", "name": "RealName", "address": "RealAddr"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        )
+        out = self._apply(san, resp, "socialURLs", 3)
+        assert out[0] == out[1] == out[2]  # stable synthetic values across re-applies
+        assert "RealName" not in json.dumps(out) and "RealAddr" not in json.dumps(out)  # scrubbed
+        assert out[0][self.MARKER] is True
+
+    def test_id_bearing_node_stays_idempotent(self):
+        san = MedalliaResponseBodySanitizer()
+        resp = self._resp(
+            {
+                "feedback": {
+                    "nodes": [{"id": "12345", "name": "RealName"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        )
+        out = self._apply(san, resp, "feedback", 3)
+        assert out[0] == out[1] == out[2]
+        assert out[0]["id"] == "RESP-0001"
+
+    def test_scrub_marker_never_becomes_an_output_column(self):
+        san = MedalliaResponseBodySanitizer()
+        resp = self._resp(
+            {
+                "socialURLs": {
+                    "nodes": [{"textIdentifier": "T", "name": "RealName", "address": "RealAddr"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        )
+        node = self._apply(san, resp, "socialURLs", 1)[0]
+        assert self.MARKER not in flatten_node(node)
 
 
 # ==================================================================================================

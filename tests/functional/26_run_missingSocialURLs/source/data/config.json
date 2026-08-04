@@ -1,0 +1,15 @@
+{
+  "action": "run",
+  "parameters": {
+    "instance_host": "example.medallia.com",
+    "api_host": "example.apis.medallia.com",
+    "company_name": "example",
+    "client_id": "DUMMY_CLIENT_ID",
+    "#client_secret": "DUMMY_CLIENT_SECRET",
+    "mode": "structured",
+    "data_object": "missingSocialURLs",
+    "fields": [],
+    "load_type": "full_load",
+    "page_size": 25
+  }
+}

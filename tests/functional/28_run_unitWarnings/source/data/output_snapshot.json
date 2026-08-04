@@ -1,0 +1,27 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "unitWarnings.csv": {
+      "columns": [
+        "type",
+        "identifier",
+        "name",
+        "address",
+        "city",
+        "postalCode",
+        "_row_hash"
+      ],
+      "hash": "sha256:010d5ab0cf414a35796584982c769140d474e47f0e1056f453a55a7d3456759d",
+      "row_count": 177,
+      "size_bytes": 33193
+    },
+    "unitWarnings.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:300875f89fbff54bbdb37f8d17b9577047e1f600d8d7003ae6eeab0f5ff2284c",
+      "row_count": null,
+      "size_bytes": 1183
+    }
+  },
+  "version": "1.0"
+}

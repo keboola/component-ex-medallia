@@ -831,8 +831,12 @@ def _flatten_value(value: Any) -> Any:
 
 
 def flatten_node(node: dict[str, Any]) -> dict[str, Any]:
-    """Map one GraphQL node to one flat output row, detecting each value's shape."""
-    return {key: _flatten_value(value) for key, value in node.items()}
+    """Map one GraphQL node to one flat output row, detecting each value's shape.
+
+    ``__``-prefixed keys are internal markers (e.g. the VCR scrubber's idempotency stamp) and are
+    never real Medallia fields, so they are dropped rather than emitted as an output column.
+    """
+    return {key: _flatten_value(value) for key, value in node.items() if not key.startswith("__")}
 
 
 def row_hash(row: Mapping[str, Any]) -> str:

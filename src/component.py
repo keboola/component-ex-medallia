@@ -87,6 +87,12 @@ try:
         scrub_before_read = True
 
         SYNTHETIC_COMMENT = "Synthetic feedback comment."
+        # Idempotency marker stamped on every scrubbed node. keboola.vcr applies a
+        # scrub_before_read sanitizer multiple times with the SAME instance (pre-read, cassette
+        # copy, and every replay read), so it MUST be idempotent. A ``RESP-`` id alone can't mark
+        # id-less node shapes (socialURLs, unitWarnings, …); this marker works for ANY shape and is
+        # dropped by ``flatten_node`` (``__``-prefixed), so it never reaches an output column.
+        _SCRUBBED_MARKER = "__scrubbed__"
         # A fixed synthetic field catalogue. Field IDs are schema identifiers (not PII) and are
         # deliberately the ones the recorded cases select/order by, so replay types columns and
         # detects the INT watermark exactly as the live schema would (an INT finish field →
@@ -203,23 +209,30 @@ try:
             head = nodes[0]
             return isinstance(head, dict) and "dataType" in head and "values" not in head
 
-        @staticmethod
-        def _is_synthetic_node(node: dict) -> bool:
-            """True if a node was already synthesised (idempotency guard for the double apply).
+        @classmethod
+        def _is_synthetic_node(cls, node: dict) -> bool:
+            """True if a node was already synthesised (idempotency guard for the multi-apply).
 
-            Synthetic nodes carry a ``RESP-####`` id sentinel; real Medallia node ids are numeric
-            so the prefix never collides. Only id-bearing shapes are recorded here (feedback /
-            invitations / raw feedback all expose ``id``); id-less scalar objects are not recorded.
+            The ``__scrubbed__`` marker covers EVERY node shape, including id-less objects
+            (socialURLs, unitWarnings, …) that have no id. The legacy ``RESP-####`` id sentinel is
+            still honoured so cassettes recorded before the marker replay unchanged (real Medallia
+            node ids are numeric, so the ``RESP-`` prefix never collides).
             """
+            if node.get(cls._SCRUBBED_MARKER) is True:
+                return True
             nid = node.get("id")
             return isinstance(nid, str) and nid.startswith("RESP-")
 
         def _synthesize_node(self, node: dict) -> None:
-            """Overwrite every field of one node, detecting each value's shape."""
+            """Overwrite every field of one node, detecting each value's shape, then mark it."""
             self._node_counter += 1
             n = self._node_counter
             for key in list(node.keys()):
                 node[key] = self._synthesize_field(key, n, node[key])
+            # Stamp the idempotency marker LAST so a re-application skips this node instead of
+            # re-numbering it (which is exactly what broke id-less run cassettes: a drifting
+            # _node_counter produced different synthetic values in expected/ vs the cassette).
+            node[self._SCRUBBED_MARKER] = True
 
         def _synthesize_field(self, key: str, n: int, value: Any) -> Any:
             """Return a synthetic replacement for one field value, preserving its shape."""

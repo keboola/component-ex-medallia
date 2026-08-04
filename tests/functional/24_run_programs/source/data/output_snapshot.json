@@ -1,0 +1,32 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "programs.csv": {
+      "columns": [
+        "id",
+        "name",
+        "description",
+        "status",
+        "createdBy",
+        "createdOn",
+        "modifiedBy",
+        "modifiedOn",
+        "activationDate",
+        "responsesCount",
+        "getProgramReportConfiguration",
+        "type"
+      ],
+      "hash": "sha256:9e6166a826727312a3b140ef2ffcac544b4802357ed3cf44d9f192efc9e2adc3",
+      "row_count": 2,
+      "size_bytes": 388
+    },
+    "programs.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:55d0ce7fc1945fab53fa452713897b316a19e3d3feb181382ca4ef9937b2fb7d",
+      "row_count": null,
+      "size_bytes": 1953
+    }
+  },
+  "version": "1.0"
+}
