@@ -1050,6 +1050,52 @@ class TestPaginator:
         assert nodes == [{"id": "1"}]
         assert len(session.requests) == 1
 
+    def test_nonnull_int_cursor_seeds_zero_on_first_page(self):
+        # A NonNull-Int `after` (socialURLs / unitWarnings …) cannot be null on page 1 — the gateway
+        # 500s. It must be seeded with 0 instead. Regression for the exhaustive-smoke failure.
+        session = _StubSession([_page_response([{"id": "1"}], has_next=False, end_cursor=None)])
+        client = MedalliaClient(api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session)
+        nodes = list(client.fetch_object("feedback", "query {}", page_size=25, after_type="Int!"))
+        assert nodes == [{"id": "1"}]
+        assert session.requests[0]["json"]["variables"] == {"first": 25, "after": 0}
+
+    def test_nonnull_int_cursor_coerces_numeric_end_cursor_to_int(self):
+        session = _StubSession(
+            [
+                _page_response([{"id": "1"}], has_next=True, end_cursor="25"),
+                _page_response([{"id": "2"}], has_next=False, end_cursor=None),
+            ]
+        )
+        client = MedalliaClient(api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session)
+        nodes = list(client.fetch_object("feedback", "query {}", page_size=25, after_type="Int!"))
+        assert nodes == [{"id": "1"}, {"id": "2"}]
+        assert session.requests[0]["json"]["variables"] == {"first": 25, "after": 0}
+        assert session.requests[1]["json"]["variables"] == {"first": 25, "after": 25}  # int, not "25"
+
+    def test_nullable_cursor_still_starts_null(self):
+        session = _StubSession([_page_response([{"id": "1"}], has_next=False, end_cursor=None)])
+        client = MedalliaClient(api_host="x.apis.medallia.com", token_manager=_StubTokenManager(), session=session)
+        list(client.fetch_object("feedback", "query {}", page_size=25, after_type="ID"))
+        assert session.requests[0]["json"]["variables"] == {"first": 25, "after": None}
+
+
+class TestRunWrapsDataFetchError:
+    def test_client_error_during_fetch_becomes_user_exception(self, monkeypatch):
+        # A data-fetch MedalliaClientError must surface as a clean UserException (exit 1) instead of
+        # an uncaught exit-2 "application" crash whose stderr Keboola hides from the user.
+        comp = object.__new__(Component)
+        row = RowConfiguration(data_object="socialURLs", mode="structured")
+        monkeypatch.setattr(comp, "_get_config", lambda: None)
+        monkeypatch.setattr(comp, "_get_row", lambda: row)
+        monkeypatch.setattr(comp, "_build_client", lambda config: object())
+
+        def boom(client, r):
+            raise MedalliaClientError("Medallia returned HTTP 500 after 5 retries.")
+
+        monkeypatch.setattr(comp, "_run_structured", boom)
+        with pytest.raises(UserException, match=r"socialURLs.*HTTP 500"):
+            comp.run()
+
 
 # ==================================================================================================
 # 11. MedalliaClient error / retry paths

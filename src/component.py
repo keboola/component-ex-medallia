@@ -513,10 +513,18 @@ class Component(ComponentBase):
         config = self._get_config()
         row = self._get_row()
         client = self._build_client(config)
-        if row.mode == Mode.raw:
-            self._run_raw(client, row)
-        else:
-            self._run_structured(client, row)
+        try:
+            if row.mode == Mode.raw:
+                self._run_raw(client, row)
+            else:
+                self._run_structured(client, row)
+        except MedalliaClientError as exc:
+            # A data-fetch failure (e.g. a Medallia 5xx after retries) is otherwise uncaught and
+            # surfaces as an exit-2 "application" error whose stderr Keboola HIDES from the user
+            # (they only see "Internal Server Error occurred"). Re-raise as a UserException so the
+            # job fails cleanly (exit 1) with an actionable, visible message.
+            target = row.data_object or row.output_table or "the raw query"
+            raise UserException(f"Medallia extraction of '{target}' failed: {exc}") from exc
 
     def _run_structured(self, client: MedalliaClient, row: RowConfiguration) -> None:
         if not row.data_object:
@@ -551,7 +559,7 @@ class Component(ComponentBase):
         table_name = self._output_table_name(row.output_table, row.data_object)
         # Write mode follows the load type: incremental → upsert per PK; full → overwrite.
         table = self._build_table_definition(table_name, fieldnames, shape, field_meta, row.incremental)
-        nodes = client.fetch_object(row.data_object, query, row.page_size)
+        nodes = client.fetch_object(row.data_object, query, row.page_size, after_type=shape.after_type)
         max_watermark = self._write_rows(
             table.full_path, fieldnames, nodes, shape.has_id, row.incremental_field, is_int, lower_bound
         )

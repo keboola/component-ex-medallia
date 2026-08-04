@@ -577,6 +577,11 @@ class GenericQueryBuilder:
 # HTTP client + Relay cursor paginator
 # --------------------------------------------------------------------------------------------
 
+# Cursor value types that carry a number: a NON-NULL one (e.g. ``Int!``) is seeded with 0 on
+# page 1 (it cannot be null), and a numeric ``endCursor`` string is coerced back to int for the
+# following page's variable.
+_NUMERIC_GRAPHQL_TYPES = frozenset({"Int", "Long", "Float", "BigInt", "BigDecimal"})
+
 
 class MedalliaClient:
     """POSTs GraphQL to the Medallia API gateway with auth, throttling and cursor pagination."""
@@ -608,14 +613,25 @@ class MedalliaClient:
         query: str,
         page_size: int,
         extract_connection: Callable[[dict[str, Any]], dict[str, Any]],
+        after_type: str = "String",
     ) -> Iterator[dict[str, Any]]:
         """Yield nodes across Relay cursor pages driven by ``pageInfo.hasNextPage``.
 
         ``first`` / ``after`` travel as GraphQL variables. ``extract_connection`` selects the
         single connection object from the response ``data`` (by object name in structured mode,
         or by single-connection detection in raw mode). ``totalCount`` is never consulted.
+
+        ``after_type`` is the connection's declared cursor type. A NULLABLE cursor (``ID`` /
+        ``String`` / ``Int``) starts as ``null`` — the Relay first-page convention. A NON-NULL
+        cursor cannot take ``null`` on page 1: some Medallia connections (``socialURLs``,
+        ``unitWarnings``, ``missingSocialURLs``, ``socialUrlsHealth``) type ``after`` as ``Int!``,
+        and passing null 500s the gateway ("coerced Null value for NonNull type 'Int!'"). Such a
+        cursor is seeded with the type's zero value (``0`` for Int), and a numeric ``endCursor``
+        string is coerced back to ``int`` so the NonNull-Int variable accepts it on later pages.
         """
-        after: str | None = None
+        non_null = after_type.endswith("!")
+        numeric_cursor = (after_type[:-1] if non_null else after_type) in _NUMERIC_GRAPHQL_TYPES
+        after: int | str | None = (0 if numeric_cursor else "") if non_null else None
         pages = 0
         while True:
             data = self._post_graphql(query, variables={"first": page_size, "after": after})
@@ -632,10 +648,14 @@ class MedalliaClient:
             if not after:
                 logging.warning("hasNextPage is true but endCursor is empty; stopping to avoid a loop.")
                 break
+            if numeric_cursor and isinstance(after, str) and after.lstrip("-").isdigit():
+                after = int(after)  # a NonNull-Int cursor variable rejects a numeric STRING endCursor
 
-    def fetch_object(self, object_name: str, query: str, page_size: int) -> Iterator[dict[str, Any]]:
+    def fetch_object(
+        self, object_name: str, query: str, page_size: int, after_type: str = "String"
+    ) -> Iterator[dict[str, Any]]:
         """Paginate a structured-mode connection selected by its Query-root field name."""
-        return self.paginate(query, page_size, lambda data: data.get(object_name) or {})
+        return self.paginate(query, page_size, lambda data: data.get(object_name) or {}, after_type=after_type)
 
     def run_metadata_query(
         self, query: str, compute_cost_only: bool = False, variables: dict[str, Any] | None = None
