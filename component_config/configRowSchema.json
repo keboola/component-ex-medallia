@@ -170,7 +170,8 @@
       "format": "editor",
       "options": {
         "editor": {
-          "mode": "application/json"
+          "mode": "application/json",
+          "placeholder": "{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}"
         },
         "dependencies": {
           "mode": "structured"
