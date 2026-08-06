@@ -1,1 +1,196 @@
-{}
+{
+  "type": "object",
+  "title": "Medallia Object Extraction",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "Pick an object to extract, or write your own query",
+      "enum": ["structured", "raw"],
+      "options": {
+        "enum_titles": ["Guided (pick an object)", "Raw GraphQL query"],
+        "tooltip": "Guided mode extracts one object with the fields you pick, and can load only new records. Raw mode runs a GraphQL query you write yourself (always loads everything)."
+      },
+      "default": "structured",
+      "propertyOrder": 10
+    },
+    "data_object": {
+      "type": "string",
+      "title": "Data Object",
+      "description": "The object to extract into one table",
+      "format": "select",
+      "enum": [],
+      "options": {
+        "tags": true,
+        "async": {
+          "label": "Load Objects",
+          "action": "listObjects",
+          "autoload": true,
+          "cache": true
+        },
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "The list is loaded from your instance. If it stays empty, your instance blocks automatic discovery — type the object name manually (e.g. `feedback`, `customers`, `programs`)."
+      },
+      "propertyOrder": 20
+    },
+    "only_program_fields": {
+      "type": "boolean",
+      "title": "Only fields used on a survey program",
+      "description": "Show only fields collected on a survey program",
+      "format": "checkbox",
+      "options": {
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "Off (default): the Fields list shows every field available for this object. On: it shows only fields tied to at least one survey program, which can be a much shorter list. If a field you expect is missing, leave this off. Changing it reloads the Fields list."
+      },
+      "propertyOrder": 25
+    },
+    "fields": {
+      "type": "array",
+      "title": "Fields",
+      "description": "The fields to extract; leave empty to take all of them",
+      "format": "select",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": []
+      },
+      "options": {
+        "async": {
+          "label": "Load Fields",
+          "action": "listFields",
+          "autoload": ["data_object", "only_program_fields"],
+          "cache": true
+        },
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "Each field you pick becomes one column in the output table. The list reloads when you change the object or the toggle above. Leave empty to take every available field."
+      },
+      "propertyOrder": 30
+    },
+    "raw_query": {
+      "type": "string",
+      "title": "Raw GraphQL Query",
+      "description": "A GraphQL query returning exactly one paginated connection.",
+      "format": "editor",
+      "options": {
+        "editor": {
+          "mode": "text/plain"
+        },
+        "dependencies": {
+          "mode": "raw"
+        },
+        "tooltip": "Must declare $first and $after variables (with your connection's ACTUAL argument types — on Medallia these are typically first: Int! and after: ID, not Int/String), pass them to exactly one top-level connection, and select nodes { … } and pageInfo { hasNextPage endCursor }. The component injects first/after (after starts as null, then the endCursor) and pages via pageInfo, but runs your query verbatim without rewriting variable types. You may also use {{start_date}} and {{end_date}} placeholders anywhere in the query — they are replaced with the resolved Start Date / End Date (relative dates like '5 days ago' supported), e.g. `gte: \"{{start_date}}\"`. Raw mode is always a full load."
+      },
+      "propertyOrder": 40
+    },
+    "output_table": {
+      "type": "string",
+      "title": "Storage Table Name",
+      "description": "Name for the output table (required in raw mode)",
+      "options": {
+        "tooltip": "The name of the output table. In guided mode it is optional and defaults to the object name; in raw mode you must set it, because there is no object name to fall back on. Use different names to extract the same object several ways in one configuration."
+      },
+      "propertyOrder": 50
+    },
+    "validate_query": {
+      "type": "button",
+      "format": "sync-action",
+      "options": {
+        "async": {
+          "label": "Validate & Preview Query",
+          "action": "validateQuery"
+        },
+        "dependencies": {
+          "mode": "raw"
+        }
+      },
+      "propertyOrder": 60
+    },
+    "load_type": {
+      "type": "string",
+      "title": "Load Type",
+      "description": "Write mode: Incremental upserts by primary key; Full Load overwrites the table. Defaults to Incremental Load when left unset.",
+      "enum": ["incremental_load", "full_load"],
+      "options": {
+        "enum_titles": ["Incremental Load", "Full Load"],
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "How the table is written. **Incremental Load** adds new rows and updates changed ones (matched by the table's primary key), and remembers the highest Date Field value it has loaded: the first run reads from the Start Date, then each later run automatically resumes from that remembered value — so it is that point, not the Start Date, that sets how far back later runs reach. **Full Load** re-reads the whole window and overwrites the entire table every run. The Date Field, Start Date and End Date set the date range; that is separate from the write mode chosen here. Left unset, behaves as Incremental Load."
+      },
+      "propertyOrder": 70
+    },
+    "incremental_field": {
+      "type": "string",
+      "title": "Date Field",
+      "description": "The date field used to load only new records and to apply the dates below",
+      "format": "select",
+      "enum": [],
+      "options": {
+        "async": {
+          "label": "Load Date Fields",
+          "action": "listDateFields",
+          "autoload": ["data_object"],
+          "cache": true
+        },
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "The date field that the Start Date and End Date apply to. For an incremental load, the component also remembers the latest value it has seen and picks up from there on the next run. Leave empty to load the whole object with no date limit."
+      },
+      "propertyOrder": 80
+    },
+    "initial_start": {
+      "type": "string",
+      "title": "Start Date",
+      "description": "The earliest date to load from; empty means no start limit",
+      "options": {
+        "tooltip": "The start of the date range to load. In guided mode it is the earliest date pulled — for an incremental load it applies only to the first run, then the component continues from where it left off (needs a Date Field). In raw mode it replaces `{{start_date}}` in your query. Accepts a date like `2026-01-01`, a number of seconds since 1970, or words like `yesterday`, `5 days ago`, or `last monday`. Leave empty for no start limit."
+      },
+      "propertyOrder": 90
+    },
+    "end_date": {
+      "type": "string",
+      "title": "End Date",
+      "description": "The latest date to load up to; empty means up to now",
+      "options": {
+        "tooltip": "The end of the date range to load (that whole day is included). In guided mode it is the latest date pulled; empty means up to now. In raw mode it replaces `{{end_date}}` in your query. Accepts a date like `2026-01-31`, a number of seconds since 1970, or words like `yesterday`."
+      },
+      "propertyOrder": 95
+    },
+    "filters": {
+      "type": "string",
+      "title": "Filters",
+      "description": "Optional extra filter, written as JSON",
+      "format": "editor",
+      "options": {
+        "editor": {
+          "mode": "application/json",
+          "placeholder": "{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}"
+        },
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "A Medallia filter tree (JSON), AND-joined with the incremental watermark. A leaf clause is `{\"fieldIds\": [\"FIELD_ID\"], \"OP\": VALUE}`, where `OP` is one of `eq`, `in`, `gt`, `gte`, `lt`, `lte`, `isNull`; combine leaves with `and` / `or` / `not`. Example: `{\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}`. Field ids come from the Load Fields picker. Full grammar: [Medallia Query API — Filter and sort data](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-and-sort-data). Leave empty for no extra filtering."
+      },
+      "propertyOrder": 100
+    },
+    "page_size": {
+      "type": "integer",
+      "title": "Page Size",
+      "description": "Records fetched per request (25–500). Lower it if you select many fields.",
+      "default": 100,
+      "minimum": 25,
+      "maximum": 500,
+      "options": {
+        "tooltip": "How many records to fetch per request (default 100, allowed 25–500). Each batch is held in memory before it is written out, so if you extract many fields at once, keep this lower (e.g. 50–100) to avoid running out of memory. Values outside 25–500 are adjusted into range."
+      },
+      "propertyOrder": 110
+    }
+  }
+}

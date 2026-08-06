@@ -1,0 +1,84 @@
+{
+  "exit_code": null,
+  "stderr": "",
+  "logs": [
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Minting Medallia OAuth token.",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 1: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 2: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 3: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 4: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 5: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 6: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 7: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 8: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 9: 25 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Fetched page 10: 23 node(s).",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Wrote 248 record(s) to socialUrlsHealth.csv.",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "No watermark to persist; leaving state unchanged.",
+      "timestamp": "2026-08-04T15:25:17.000Z"
+    }
+  ]
+}

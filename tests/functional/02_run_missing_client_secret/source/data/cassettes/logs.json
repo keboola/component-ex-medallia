@@ -1,0 +1,12 @@
+{
+  "exit_code": 1,
+  "stderr": "Invalid configuration: field '#client_secret' — Field required (missing)\n",
+  "logs": [
+    {
+      "level": "ERROR",
+      "logger": "root",
+      "message": "Invalid configuration: field '#client_secret' — Field required (missing)",
+      "timestamp": "2026-07-23T17:37:23.000Z"
+    }
+  ]
+}

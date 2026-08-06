@@ -1,84 +1,125 @@
-ex-medallia
-=============
+# Medallia Experience Cloud Extractor (`keboola.ex-medallia`)
 
-Description
+Extracts data from **Medallia Experience Cloud** through the Medallia **Query API** — a single
+GraphQL endpoint. The component is introspection-driven: it discovers the queryable objects on
+your instance and extracts any of them (feedback, invitations, customers, programs, and other
+collections) into tables, or runs a raw GraphQL query you author.
 
-**Table of Contents:**
+## Functionality
 
-[TOC]
+- **Any object, one table per row.** Each configuration row extracts one Medallia object. The
+  object is picked from a list populated by live schema introspection, or entered manually.
+- **Metadata-driven field selection.** Fields are chosen by name from the object's catalog, or
+  left empty to take all scalar fields. The different Medallia node shapes (`fieldData`, `data`,
+  plain scalar) are flattened automatically.
+- **Incremental loading** where the object supports it: a per-row watermark on a date/int field
+  fetches only newer records; the value format (epoch or ISO date) is auto-detected. Objects
+  without a suitable field load in full.
+- **Raw GraphQL mode** for advanced use: supply a query returning a single paginated connection
+  and the component handles cursor pagination and node flattening.
+- **Optional business filters** — a Medallia filter tree (as JSON) merged into each structured
+  query.
 
-Functionality Notes
-===================
+## Prerequisites
 
-Prerequisites
-=============
+Obtain an **OAuth 2.0 client-credentials** application from your Medallia administrator with
+access to the Query API. You will need:
 
-Ensure you have the necessary API token, register the application, etc.
+- the **reporting instance host** (OAuth token endpoint),
+- the **company / tenant name** (`<companyName>` OAuth path segment),
+- the **API gateway host** (`*.apis.medallia.com`),
+- the OAuth **client ID** and **client secret**.
 
-Features
-========
+## Configuration
 
-| **Feature**             | **Description**                               |
-|-------------------------|-----------------------------------------------|
-| Generic UI Form         | Dynamic UI form for easy configuration.       |
-| Row-Based Configuration | Allows structuring the configuration in rows. |
-| OAuth                   | OAuth authentication enabled.                 |
-| Incremental Loading     | Fetch data in new increments.                 |
-| Backfill Mode           | Supports seamless backfill setup.             |
-| Date Range Filter       | Specify the date range for data retrieval.    |
+### Connection (config level)
 
-Supported Endpoints
-===================
+| Parameter          | Key               | Description                                              |
+|--------------------|-------------------|---------------------------------------------------------|
+| Instance Host      | `instance_host`   | Reporting instance host for the OAuth token endpoint.   |
+| Company Name       | `company_name`    | The `<companyName>` OAuth path segment (tenant).        |
+| API Host           | `api_host`        | The `*.apis.medallia.com` gateway host for the Query API. |
+| Client ID          | `client_id`       | OAuth client id (non-secret).                           |
+| Client Secret      | `#client_secret`  | OAuth client secret (encrypted).                        |
 
-If you need additional endpoints, please submit your request to
-[ideas.keboola.com](https://ideas.keboola.com/).
+Use **Test Connection** to validate the credentials before saving.
 
-Configuration
-=============
+### Data extraction (one row per object)
 
-Param 1
--------
-Details about parameter 1.
+Each row runs in one of two **modes**.
 
-Param 2
--------
-Details about parameter 2.
+**Guided (`structured`)**
 
-Output
-======
+| Parameter          | Key                   | Description                                                                                  |
+|--------------------|-----------------------|----------------------------------------------------------------------------------------------|
+| Data Object        | `data_object`         | Medallia connection to extract (**Load Objects** lists what your instance exposes).          |
+| Fields             | `fields`              | Field IDs to extract (**Load Fields**); leave empty to take all scalar fields.               |
+| Field picker scope | `only_program_fields` | Picker-only: `true` offers only fields used on a survey program; `false` (default) offers the whole catalog. |
+| Load Type          | `load_type`           | `incremental_load` (default) or `full_load`.                                                 |
+| Incremental Field  | `incremental_field`   | Date/int field ID driving the watermark (**Load Date Fields**).                              |
+| Start Date         | `initial_start`       | First-run lower bound: ISO date, epoch seconds, or a relative expression (`5 days ago`).     |
+| End Date           | `end_date`            | Upper bound (same formats); empty = now.                                                      |
+| Filters            | `filters`             | Optional Medallia filter tree as a JSON string.                                              |
+| Output Table       | `output_table`        | Optional; defaults to the data object name.                                                  |
+| Page Size          | `page_size`           | Records per API page; clamped to **25–500** (default **100**).                                |
 
-Provides a list of tables, foreign keys, and schema.
+**Raw GraphQL query (`raw`)**
 
-Development
------------
+| Parameter    | Key            | Description                                                                                       |
+|--------------|----------------|--------------------------------------------------------------------------------------------------|
+| Query        | `raw_query`    | GraphQL query returning exactly one paginated connection (declare `$first`/`$after`, select `pageInfo`). |
+| Output Table | `output_table` | **Required** — there is no object name to derive it from.                                         |
+| Page Size    | `page_size`    | Records per API page; clamped to **25–500** (default **100**).                                    |
 
-To customize the local data folder path, replace the `CUSTOM_FOLDER` placeholder with your desired path in the `docker-compose.yml` file:
+Raw mode always performs a full load. Use **Validate & Preview Query** to check it.
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    volumes:
-      - ./:/code
-      - ./CUSTOM_FOLDER:/data
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+### Sync actions
 
-Clone this repository, initialize the workspace, and run the component using the following
-commands:
+| Button                   | Action           | Purpose                                                      |
+|--------------------------|------------------|-------------------------------------------------------------|
+| Test Connection          | `testConnection` | Validate the OAuth credentials.                             |
+| Load Objects             | `listObjects`    | List the queryable objects on the instance.                |
+| Load Fields              | `listFields`     | List a selected object's fields by name.                   |
+| Load Date Fields         | `listDateFields` | List date/int fields usable as an incremental watermark.   |
+| Validate & Preview Query | `validateQuery`  | Validate a raw GraphQL query.                              |
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-git clone  component-ex-medallia
+## Output
+
+Writes **one table per configuration row**. The primary key is the object's own record `id`
+where the API exposes one; for objects without a stable id, a deterministic `_row_hash` is used.
+Incremental runs upsert on the primary key rather than duplicating records, and persist the
+highest seen watermark (`last_incremental_value`) to component state for the next run. A correct
+run that returns no rows is treated as a success.
+
+## Development
+
+The local data folder path can be customized by replacing the `CUSTOM_FOLDER` placeholder in
+`docker-compose.yml`:
+
+```yaml
+volumes:
+  - ./:/code
+  - ./CUSTOM_FOLDER:/data
+```
+
+Clone the repository and run the component locally:
+
+```bash
+git clone https://github.com/keboola/component-ex-medallia.git
 cd component-ex-medallia
 docker-compose build
 docker-compose run --rm dev
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
 
-Run the test suite and perform lint checks using this command:
+Run the test suite (pytest) and lint/type checks (ruff + ty):
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```bash
 docker-compose run --rm test
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
 
-Integration
-===========
+The project targets Python 3.14 and uses `uv` for dependency management.
+
+## Integration
 
 For details about deployment and integration with Keboola, refer to the
-[deployment section of the developer
-documentation](https://developers.keboola.com/extend/component/deployment/).
+[deployment section of the developer documentation](https://developers.keboola.com/extend/component/deployment/).

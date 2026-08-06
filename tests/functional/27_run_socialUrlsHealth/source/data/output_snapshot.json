@@ -1,0 +1,30 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "socialUrlsHealth.csv": {
+      "columns": [
+        "unitId",
+        "unitTextIdentifier",
+        "unitName",
+        "unitAddress",
+        "url",
+        "errorDate",
+        "errorType",
+        "errorSubtype",
+        "socialId",
+        "_row_hash"
+      ],
+      "hash": "sha256:03466a563754fd9abaaa149c45111a53456c4ae755210de50330e31f561f2fc0",
+      "row_count": 249,
+      "size_bytes": 53107
+    },
+    "socialUrlsHealth.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:8741b6924f9781064286232f9090ce3aa7fd2866b227ad34d828468bd3d2ee5f",
+      "row_count": null,
+      "size_bytes": 1645
+    }
+  },
+  "version": "1.0"
+}

@@ -1,0 +1,21 @@
+{
+  "action": "run",
+  "parameters": {
+    "instance_host": "example.medallia.com",
+    "api_host": "example.apis.medallia.com",
+    "company_name": "example",
+    "client_id": "DUMMY_CLIENT_ID",
+    "#client_secret": "DUMMY_CLIENT_SECRET",
+    "mode": "structured",
+    "data_object": "invitations",
+    "page_size": 25,
+    "load_type": "incremental_load",
+    "fields": [
+      "a_customerid",
+      "e_accepteddate"
+    ],
+    "incremental_field": "a_initial_finish_timestamp",
+    "initial_start": "1781542800",
+    "end_date": "1781550000"
+  }
+}

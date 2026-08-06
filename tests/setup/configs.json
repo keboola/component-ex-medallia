@@ -1,0 +1,381 @@
+[
+  {
+    "name": "07_testConnection",
+    "description": "testConnection sync action - token mint + compute_cost_only pre-flight (no quota).",
+    "config": {
+      "action": "testConnection",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET"
+      }
+    }
+  },
+  {
+    "name": "08_listObjects",
+    "description": "listObjects sync action - one __schema introspection; classified into the extractable set.",
+    "config": {
+      "action": "listObjects",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET"
+      }
+    }
+  },
+  {
+    "name": "09_listFields_feedback",
+    "description": "listFields sync action for feedback - the field catalogue (values replaced by a synthetic set at record time).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "feedback"
+      }
+    }
+  },
+  {
+    "name": "10_listDateFields_feedback",
+    "description": "listDateFields sync action for feedback - incremental-field candidates (DATE/DATETIME + sortable INT) from the same catalogue.",
+    "config": {
+      "action": "listDateFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "feedback"
+      }
+    }
+  },
+  {
+    "name": "11_validateQuery_preview",
+    "description": "validateQuery sync action - cost pre-flight then a small live row preview (Keboola standard).",
+    "config": {
+      "action": "validateQuery",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "raw",
+        "output_table": "raw_feedback",
+        "page_size": 25,
+        "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
+      }
+    }
+  },
+  {
+    "name": "12_feedback",
+    "description": "feedback (shape a, fieldData, node-id PK) incremental on the epoch finish field, bounded by a Start Date (epoch 1781542800) and a day-granular End Date (epoch 1781550000, floored to its day and made inclusive, so the effective upper bound is the following midnight) to keep the recording small and deterministic.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "feedback",
+        "page_size": 25,
+        "load_type": "incremental_load",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "incremental_field": "a_initial_finish_timestamp",
+        "initial_start": "1781542800",
+        "end_date": "1781550000"
+      }
+    }
+  },
+  {
+    "name": "13_invitations",
+    "description": "invitations (shape a, fieldData, node-id PK) incremental on the epoch finish field, bounded by the same Start/End Date window as 12_feedback (day-granular, inclusive End Date). Exercises the object-name path for a second object.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "invitations",
+        "page_size": 25,
+        "load_type": "incremental_load",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate"
+        ],
+        "incremental_field": "a_initial_finish_timestamp",
+        "initial_start": "1781542800",
+        "end_date": "1781550000"
+      }
+    }
+  },
+  {
+    "name": "14_invitations_full_load",
+    "description": "invitations FULL_LOAD (overwrite write mode) bounded to the same fixed 2h epoch window; exercises the full-load write path (no watermark state persisted) vs the incremental cases.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "invitations",
+        "page_size": 25,
+        "load_type": "full_load",
+        "fields": [
+          "a_customerid",
+          "e_accepteddate",
+          "e_status"
+        ],
+        "incremental_field": "a_initial_finish_timestamp",
+        "initial_start": "1781542800",
+        "end_date": "1781550000"
+      }
+    }
+  },
+  {
+    "name": "15_raw",
+    "description": "raw mode - user Relay query paginated via $first/$after; full load, no state. Bounded by an in-query epoch filter (same 2h window) so pagination terminates quickly on a small slice.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "raw",
+        "output_table": "raw_feedback",
+        "page_size": 25,
+        "raw_query": "query ($first: Int!, $after: ID) { feedback(first: $first, after: $after, filter: {fieldIds: [\"a_initial_finish_timestamp\"], gte: \"1781542800\", lt: \"1781550000\"}) { nodes { id a_customerid: fieldData(fieldId: \"a_customerid\") { values } } pageInfo { hasNextPage endCursor } } }"
+      }
+    }
+  },
+  {
+    "name": "16_listFields_customers",
+    "description": "listFields sync action for customers (shape b, customerSchema/ContactSchema).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "customers"
+      }
+    }
+  },
+  {
+    "name": "17_listFields_invitations",
+    "description": "listFields sync action for invitations (shape a, fieldData \u2014 global fields catalogue).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "invitations"
+      }
+    }
+  },
+  {
+    "name": "18_listFields_missingSocialURLs",
+    "description": "listFields sync action for missingSocialURLs (captures whatever field listing this object returns).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "missingSocialURLs"
+      }
+    }
+  },
+  {
+    "name": "19_listFields_programs",
+    "description": "listFields sync action for programs (shape c scalar \u2014 node scalars, no catalogue).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "programs"
+      }
+    }
+  },
+  {
+    "name": "20_listFields_socialURLs",
+    "description": "listFields sync action for socialURLs (id-less object \u2014 node scalars).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "socialURLs"
+      }
+    }
+  },
+  {
+    "name": "21_listFields_socialUrlsHealth",
+    "description": "listFields sync action for socialUrlsHealth (captures whatever field listing this object returns).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "socialUrlsHealth"
+      }
+    }
+  },
+  {
+    "name": "22_listFields_unitWarnings",
+    "description": "listFields sync action for unitWarnings (captures whatever field listing this object returns).",
+    "config": {
+      "action": "listFields",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "unitWarnings"
+      }
+    }
+  },
+  {
+    "name": "24_run_programs",
+    "description": "run programs (shape c scalar, id PK) \u2014 small reference object, full load.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "programs",
+        "fields": [],
+        "load_type": "full_load",
+        "page_size": 25
+      }
+    }
+  },
+  {
+    "name": "25_run_socialURLs",
+    "description": "run socialURLs (id-less, NonNull-Int! cursor (regression for the cursor + scrubber-idempotency fixes)) \u2014 small reference object, full load.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "socialURLs",
+        "fields": [],
+        "load_type": "full_load",
+        "page_size": 25
+      }
+    }
+  },
+  {
+    "name": "26_run_missingSocialURLs",
+    "description": "run missingSocialURLs (id-less, NonNull-Int! cursor) \u2014 small reference object, full load.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "missingSocialURLs",
+        "fields": [],
+        "load_type": "full_load",
+        "page_size": 25
+      }
+    }
+  },
+  {
+    "name": "27_run_socialUrlsHealth",
+    "description": "run socialUrlsHealth (id-less, NonNull-Int! cursor) \u2014 small reference object, full load.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "socialUrlsHealth",
+        "fields": [],
+        "load_type": "full_load",
+        "page_size": 25
+      }
+    }
+  },
+  {
+    "name": "28_run_unitWarnings",
+    "description": "run unitWarnings (id-less, NonNull-Int! cursor) \u2014 small reference object, full load.",
+    "config": {
+      "action": "run",
+      "parameters": {
+        "instance_host": "example.medallia.com",
+        "api_host": "example.apis.medallia.com",
+        "company_name": "example",
+        "client_id": "DUMMY_CLIENT_ID",
+        "#client_secret": "DUMMY_CLIENT_SECRET",
+        "mode": "structured",
+        "data_object": "unitWarnings",
+        "fields": [],
+        "load_type": "full_load",
+        "page_size": 25
+      }
+    }
+  }
+]

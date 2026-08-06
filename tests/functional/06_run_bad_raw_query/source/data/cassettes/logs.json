@@ -1,0 +1,12 @@
+{
+  "exit_code": 1,
+  "stderr": "Raw query must declare $first/$after and select pageInfo{hasNextPage endCursor}. Missing: $first, $after, pageInfo.\n",
+  "logs": [
+    {
+      "level": "ERROR",
+      "logger": "root",
+      "message": "Raw query must declare $first/$after and select pageInfo{hasNextPage endCursor}. Missing: $first, $after, pageInfo.",
+      "timestamp": "2026-07-23T17:37:23.000Z"
+    }
+  ]
+}

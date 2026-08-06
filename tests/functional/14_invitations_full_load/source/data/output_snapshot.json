@@ -1,0 +1,25 @@
+{
+  "files": {},
+  "hash_algorithm": "sha256",
+  "tables": {
+    "invitations.csv": {
+      "columns": [
+        "id",
+        "a_customerid",
+        "e_accepteddate",
+        "e_status",
+        "a_initial_finish_timestamp"
+      ],
+      "hash": "sha256:18cae5d31377e1d03602991be71aff276dba0cf6c14a1ef9fe209f0816eb7a02",
+      "row_count": 87,
+      "size_bytes": 6337
+    },
+    "invitations.csv.manifest": {
+      "columns": null,
+      "hash": "sha256:6b345a423dcdfca7383afa407825e1986a3676b373d3a2f291f4bf0481ac47f2",
+      "row_count": null,
+      "size_bytes": 922
+    }
+  },
+  "version": "1.0"
+}

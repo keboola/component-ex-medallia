@@ -15,5 +15,4 @@ services:
       - ./data:/data
     environment:
       - KBC_DATADIR=./data
-    command:
-      - python -m pytest tests/ --tb=short -q
+    command: ["python", "-m", "pytest", "tests/", "--tb=short", "-q"]

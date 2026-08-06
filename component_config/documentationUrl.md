@@ -1,1 +1,1 @@
-/blob/master/README.md
+https://github.com/keboola/component-ex-medallia/blob/main/README.md

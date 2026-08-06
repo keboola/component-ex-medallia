@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "stderr": "Invalid configuration: field '#client_secret' \u2014 Field required (missing)",
+  "logs": []
+}

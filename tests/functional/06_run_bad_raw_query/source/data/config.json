@@ -1,0 +1,14 @@
+{
+  "action": "run",
+  "parameters": {
+    "instance_host": "example.medallia.com",
+    "api_host": "example.apis.medallia.com",
+    "company_name": "example",
+    "client_id": "DUMMY_CLIENT_ID",
+    "#client_secret": "DUMMY_CLIENT_SECRET",
+    "mode": "raw",
+    "raw_query": "query { feedback { nodes { id } } }",
+    "output_table": "raw_feedback",
+    "page_size": 25
+  }
+}
