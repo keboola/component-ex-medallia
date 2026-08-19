@@ -129,7 +129,7 @@
   },
   {
     "name": "14_invitations_full_load",
-    "description": "invitations FULL_LOAD (overwrite write mode) bounded to the same fixed 2h epoch window; exercises the full-load write path (no watermark state persisted) vs the incremental cases.",
+    "description": "invitations FULL_LOAD (overwrite write mode) bounded to the same fixed 2h epoch window; exercises the full-load write path (overwrite) vs the incremental upsert cases.",
     "config": {
       "action": "run",
       "parameters": {

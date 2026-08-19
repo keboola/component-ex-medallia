@@ -9,7 +9,7 @@
       "enum": ["structured", "raw"],
       "options": {
         "enum_titles": ["Guided (pick an object)", "Raw GraphQL query"],
-        "tooltip": "Guided mode extracts one object with the fields you pick, and can load only new records. Raw mode runs a GraphQL query you write yourself (always loads everything)."
+        "tooltip": "Guided mode extracts one object with the fields you pick, over the date range you set. Raw mode runs a GraphQL query you write yourself (always loads everything)."
       },
       "default": "structured",
       "propertyOrder": 10
@@ -176,7 +176,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "A Medallia filter tree (JSON), AND-joined with the incremental watermark. A leaf clause is `{\"fieldIds\": [\"FIELD_ID\"], \"OP\": VALUE}`, where `OP` is one of `eq`, `in`, `gt`, `gte`, `lt`, `lte`, `isNull`; combine leaves with `and` / `or` / `not`. Example: `{\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}`. Field ids come from the Load Fields picker. Full grammar: [Medallia Query API — Filter and sort data](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-and-sort-data). Leave empty for no extra filtering."
+        "tooltip": "A Medallia filter tree (JSON), AND-joined with the date range above. A leaf clause is `{\"fieldIds\": [\"FIELD_ID\"], \"OP\": VALUE}`, where `OP` is one of `eq`, `in`, `gt`, `gte`, `lt`, `lte`, `isNull`; combine leaves with `and` / `or` / `not`. Example: `{\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}`. Field ids come from the Load Fields picker. Full grammar: [Medallia Query API — Filter and sort data](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-and-sort-data). Leave empty for no extra filtering."
       },
       "propertyOrder": 100
     },

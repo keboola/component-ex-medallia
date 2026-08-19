@@ -10,8 +10,8 @@ here, both replayed with NO live network:
   ``tests/setup/configs.json`` and sanitized AT RECORD TIME by ``MedalliaResponseBodySanitizer``
   (``src/component.py``) so every committed value is synthetic by construction.
 
-Fine-grained deterministic logic (per node shape / PK / mode, incremental resume, raw-mode
-contract checks, watermark advance, secret-leak guard) is covered independently and
+Fine-grained deterministic logic (per node shape / PK / mode, date-window resolution, raw-mode
+contract checks, secret-leak guard) is covered independently and
 network-free in ``tests/test_unit.py``; this module is the replay-regression net over the real
 recorded wire shapes. When no cassettes are present it skips cleanly so the suite stays
 collectable.

@@ -71,7 +71,7 @@ try:
         this REPLACES every value across every node shape (fieldData / data / bare scalar) and
         every node id, so nothing real survives into a cassette. Values keep their ARITY and
         SHAPE (a multi-value field stays multi-value; an epoch-int field stays a long integer; a
-        date/datetime field stays date-shaped) so type inference and watermark advance behave.
+        date/datetime field stays date-shaped) so type inference and date bounds behave.
 
         ``scrub_before_read = True``: keboola.vcr applies this sanitizer to the response BEFORE
         the component reads it during recording (as well as to the cassette), so the component
@@ -94,8 +94,8 @@ try:
         _SCRUBBED_MARKER = "__scrubbed__"
         # A fixed synthetic field catalogue. Field IDs are schema identifiers (not PII) and are
         # deliberately the ones the recorded cases select/order by, so replay types columns and
-        # detects the INT watermark exactly as the live schema would (an INT finish field →
-        # numeric watermark + integer column; a DATE/DATETIME field → date/timestamp column; a
+        # detects an INT date field exactly as the live schema would (an INT finish field →
+        # numeric bound + integer column; a DATE/DATETIME field → date/timestamp column; a
         # multivalued field → JSON-encoded string column).
         _SYNTHETIC_FIELD_CATALOG = [
             {"id": "a_surveyid", "name": "Survey ID", "dataType": "STRING", "sortable": True, "multivalued": False},
@@ -397,8 +397,6 @@ try:
 except ImportError:  # pragma: no cover - production image has no dev dependencies.
     VCR_SANITIZERS = []
 
-# state.json key for the single-scalar incremental watermark (spec §8).
-
 # validateQuery row-preview limits (kept small — one gentle live page shown in the config UI).
 _PREVIEW_ROWS = 5
 _PREVIEW_COLUMNS = 8
@@ -544,7 +542,7 @@ class Component(ComponentBase):
         field_meta = self._field_metadata(client, shape)
         is_int = self._incremental_is_int(shape, row.incremental_field, field_meta)
         # The Start-Date window applies to BOTH load types (bounds what's fetched); the load type
-        # only decides the write mode. Incremental additionally persists + resumes a watermark.
+        # only decides the write mode (upsert vs overwrite).
         windowed = self._date_window_supported(row, shape)
         lower_bound = self._compute_lower_bound(row, is_int) if windowed else None
         upper_bound = self._upper_bound(is_int, row.end_date) if windowed else None
@@ -673,7 +671,7 @@ class Component(ComponentBase):
 
     @staticmethod
     def _incremental_is_int(shape: ObjectShape, field_id: str, field_meta: dict) -> bool:
-        """Auto-detect the watermark value format from metadata: INT → numeric, else ISO string."""
+        """Auto-detect the date-bound format from metadata: INT → numeric, else ISO string."""
         if not field_id:
             return False
         meta = field_meta.get(field_id) or {}
@@ -700,19 +698,21 @@ class Component(ComponentBase):
         records can realistically arrive late.
         """
         if row.initial_start.strip():
-            logging.info("Loading from the Start Date (%s).", row.initial_start.strip())
-            return self._resolve_initial_start(row.initial_start, is_int)
-        if row.incremental_field:
-            logging.warning(
-                "No Start Date is set, so every run loads this object's entire history. Set a "
-                "Start Date (for example '5 days ago') to bound it."
-            )
-        logging.info("No Start Date; loading the object unbounded.")
+            # Log the RESOLVED bound, not the raw text: a relative Start Date ("5 days ago") and an
+            # ISO date on an epoch field both differ from what actually reaches the query, and the
+            # log is what someone reads when reconciling a run against Medallia.
+            resolved = self._resolve_initial_start(row.initial_start, is_int)
+            logging.info("Loading from the Start Date (%s).", resolved)
+            return resolved
+        logging.warning(
+            "No Start Date is set, so every run loads this object's entire history. Set a Start "
+            "Date (for example '5 days ago') to bound it."
+        )
         return None
 
     @staticmethod
     def _resolve_initial_start(value: str, is_int: bool) -> int | str:
-        """Resolve a first-run ``initial_start`` to the watermark field's bound format.
+        """Resolve ``initial_start`` to the date field's bound format.
 
         Accepts an absolute value — epoch seconds (e.g. ``1780272000``) or an ISO date
         (e.g. ``2026-01-01``) — OR a relative expression (e.g. ``yesterday``, ``5 days ago``,
@@ -782,7 +782,7 @@ class Component(ComponentBase):
         return None
 
     def _field_metadata(self, client: MedalliaClient, shape: ObjectShape) -> dict[str, dict[str, Any]]:
-        """Per-field metadata for typing + watermark detection, routed by object/shape (spec §6.3).
+        """Per-field metadata for typing + date-bound detection, routed by object/shape (spec §6.3).
 
         Introspected bare node scalars seed the map (GraphQL scalar type). When the object has a
         dedicated metadata catalogue — the global ``fields`` catalogue for shape (a),

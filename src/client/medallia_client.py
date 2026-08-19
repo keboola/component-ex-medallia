@@ -13,7 +13,7 @@ of a GENERIC, introspection-driven extractor (no feedback-specific code):
 * ``MedalliaClient`` — POSTs GraphQL to the API gateway with bearer auth, cost-aware
   throttling (``X-RateLimit-*``), exponential backoff on 429/5xx, a single 401 re-mint, and a
   Relay cursor paginator driven by ``pageInfo.hasNextPage`` (never ``totalCount``).
-* pure helpers ``flatten_node`` (shape-detecting), ``row_hash`` (id-less PK) and
+* pure helpers ``flatten_node`` (shape-detecting) and ``row_hash`` (id-less PK).
 
 Neither the client secret nor the access token is ever logged.
 """
@@ -491,9 +491,9 @@ class GenericQueryBuilder:
         the pure scalar shape where everything is a bare field name.
 
         The ``incremental_field`` is ALWAYS added to the selection (even when the user did not
-        list it in ``fields``): the watermark advances off the field's value in each output row,
-        so it must be fetched — otherwise the cursor never moves and every run re-reads the
-        whole window. It de-dupes against an explicit selection, so it is added at most once.
+        list it in ``fields``): the query filters and orders by it, so the value belongs in the
+        output rows for the run to be reconcilable against Medallia. It de-dupes against an
+        explicit selection, so it is added at most once.
         """
         selected = list(self._selected_fields)
         if self._node_shape == SHAPE_SCALAR:
@@ -802,7 +802,7 @@ class MedalliaClient:
 
 
 # --------------------------------------------------------------------------------------------
-# Pure helpers — flatten, row hash, watermark
+# Pure helpers — flatten, row hash
 # --------------------------------------------------------------------------------------------
 
 

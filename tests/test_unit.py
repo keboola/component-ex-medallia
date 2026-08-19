@@ -802,7 +802,7 @@ class TestSecretLeakGuard:
 
 
 # ==================================================================================================
-# 9. incremental capability + watermark helpers
+# 9. incremental capability + date-window helpers
 # ==================================================================================================
 
 
