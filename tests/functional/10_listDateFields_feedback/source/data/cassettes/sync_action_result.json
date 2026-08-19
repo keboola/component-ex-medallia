@@ -1,1 +1,18 @@
-[{"value": "e_creationdate", "label": "Creation Date"}, {"value": "e_accepteddate", "label": "Accepted Date"}, {"value": "a_initial_finish_timestamp", "label": "Initial Finish Timestamp"}, {"value": "e_nps", "label": "NPS Score"}]
+[
+  {
+    "value": "e_creationdate",
+    "label": "Creation Date (e_creationdate)"
+  },
+  {
+    "value": "e_accepteddate",
+    "label": "Accepted Date (e_accepteddate)"
+  },
+  {
+    "value": "a_initial_finish_timestamp",
+    "label": "Initial Finish Timestamp (a_initial_finish_timestamp)"
+  },
+  {
+    "value": "e_nps",
+    "label": "NPS Score (e_nps)"
+  }
+]

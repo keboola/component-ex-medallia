@@ -1,1 +1,38 @@
-[{"value": "unitId", "label": "unitId"}, {"value": "unitTextIdentifier", "label": "unitTextIdentifier"}, {"value": "unitName", "label": "unitName"}, {"value": "unitAddress", "label": "unitAddress"}, {"value": "url", "label": "url"}, {"value": "errorDate", "label": "errorDate"}, {"value": "errorType", "label": "errorType"}, {"value": "errorSubtype", "label": "errorSubtype"}, {"value": "socialId", "label": "socialId"}]
+[
+  {
+    "value": "unitId",
+    "label": "unitId"
+  },
+  {
+    "value": "unitTextIdentifier",
+    "label": "unitTextIdentifier"
+  },
+  {
+    "value": "unitName",
+    "label": "unitName"
+  },
+  {
+    "value": "unitAddress",
+    "label": "unitAddress"
+  },
+  {
+    "value": "url",
+    "label": "url"
+  },
+  {
+    "value": "errorDate",
+    "label": "errorDate"
+  },
+  {
+    "value": "errorType",
+    "label": "errorType"
+  },
+  {
+    "value": "errorSubtype",
+    "label": "errorSubtype"
+  },
+  {
+    "value": "socialId",
+    "label": "socialId"
+  }
+]

@@ -9,7 +9,7 @@
       "enum": ["structured", "raw"],
       "options": {
         "enum_titles": ["Guided (pick an object)", "Raw GraphQL query"],
-        "tooltip": "Guided mode extracts one object with the fields you pick, and can load only new records. Raw mode runs a GraphQL query you write yourself (always loads everything)."
+        "tooltip": "Guided mode extracts one object with the fields you pick, over the date range you set. Raw mode runs a GraphQL query you write yourself (always loads everything)."
       },
       "default": "structured",
       "propertyOrder": 10
@@ -68,7 +68,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "Each field you pick becomes one column in the output table. The list reloads when you change the object or the toggle above. Leave empty to take every available field."
+        "tooltip": "Each field you pick becomes one column in the output table. Fields are listed as `Name (api_id)` — the id is what Medallia's own documentation and filters use, so you can search the list by either. The list reloads when you change the object or the toggle above. Leave empty to take every available field."
       },
       "propertyOrder": 30
     },
@@ -121,14 +121,14 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "How the table is written. **Incremental Load** adds new rows and updates changed ones (matched by the table's primary key), and remembers the highest Date Field value it has loaded: the first run reads from the Start Date, then each later run automatically resumes from that remembered value — so it is that point, not the Start Date, that sets how far back later runs reach. **Full Load** re-reads the whole window and overwrites the entire table every run. The Date Field, Start Date and End Date set the date range; that is separate from the write mode chosen here. Left unset, behaves as Incremental Load."
+        "tooltip": "How the table is written. **Incremental Load** adds new rows and updates changed ones, matched by the table's primary key. **Full Load** overwrites the entire table every run. This setting controls writing only — the date range comes from the Date Field, Start Date and End Date below, and is the same either way. Left unset, behaves as Incremental Load."
       },
       "propertyOrder": 70
     },
     "incremental_field": {
       "type": "string",
       "title": "Date Field",
-      "description": "The date field used to load only new records and to apply the dates below",
+      "description": "The date field that the Start Date and End Date below apply to",
       "format": "select",
       "enum": [],
       "options": {
@@ -141,16 +141,16 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "The date field that the Start Date and End Date apply to. For an incremental load, the component also remembers the latest value it has seen and picks up from there on the next run. Leave empty to load the whole object with no date limit."
+        "tooltip": "The date field that the Start Date and End Date apply to. Leave empty to load the whole object with no date limit.\n\n**Which field to pick matters.** Choose one that reflects when a record became *available* in Medallia rather than when it was originally created — Medallia recommends `e_initialfinishdate`. With a creation date such as `e_creationdate`, a survey created on the 1st and answered on the 20th still carries the 1st, so your Start Date has to reach back far enough to cover the whole answering delay or that record is never loaded."
       },
       "propertyOrder": 80
     },
     "initial_start": {
       "type": "string",
       "title": "Start Date",
-      "description": "The earliest date to load from; empty means no start limit",
+      "description": "The earliest date to load from, on every run; empty means no start limit",
       "options": {
-        "tooltip": "The start of the date range to load. In guided mode it is the earliest date pulled — for an incremental load it applies only to the first run, then the component continues from where it left off (needs a Date Field). In raw mode it replaces `{{start_date}}` in your query. Accepts a date like `2026-01-01`, a number of seconds since 1970, or words like `yesterday`, `5 days ago`, or `last monday`. Leave empty for no start limit."
+        "tooltip": "The start of the date range to load. It applies to **every** run, not just the first — set it to `5 days ago` and every run loads the last five days. Change it and the next run uses the new value straight away, so this is also how you go back and pick up a period you missed. Accepts a date like `2026-01-01`, a number of seconds since 1970, or words like `yesterday`, `5 days ago`, or `last monday`. In raw mode it replaces `{{start_date}}` in your query. Leave empty for no start limit — but note that then every run loads the object's entire history.\n\nA rolling value such as `5 days ago` re-reads the same days each run. That is deliberate: records often reach Medallia after the date they carry, and re-reading catches them. Rows are matched on the primary key, so nothing is duplicated. Set it as far back as records can realistically arrive late."
       },
       "propertyOrder": 90
     },
@@ -176,7 +176,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "A Medallia filter tree (JSON), AND-joined with the incremental watermark. A leaf clause is `{\"fieldIds\": [\"FIELD_ID\"], \"OP\": VALUE}`, where `OP` is one of `eq`, `in`, `gt`, `gte`, `lt`, `lte`, `isNull`; combine leaves with `and` / `or` / `not`. Example: `{\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}`. Field ids come from the Load Fields picker. Full grammar: [Medallia Query API — Filter and sort data](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-and-sort-data). Leave empty for no extra filtering."
+        "tooltip": "A Medallia filter tree (JSON), AND-joined with the date range above. A leaf clause is `{\"fieldIds\": [\"FIELD_ID\"], \"OP\": VALUE}`, where `OP` is one of `eq`, `in`, `gt`, `gte`, `lt`, `lte`, `isNull`; combine leaves with `and` / `or` / `not`. Example: `{\"and\": [{\"fieldIds\": [\"e_creationdate\"], \"gte\": \"2026-01-01\"}, {\"fieldIds\": [\"a_survey_channel\"], \"in\": [\"web\", \"email\"]}]}`. Field ids come from the Load Fields picker. Full grammar: [Medallia Query API — Filter and sort data](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-and-sort-data). Leave empty for no extra filtering."
       },
       "propertyOrder": 100
     },

@@ -19,12 +19,6 @@
       "logger": "root",
       "message": "Wrote 1 record(s) to programs.csv.",
       "timestamp": "2026-08-04T15:25:17.000Z"
-    },
-    {
-      "level": "INFO",
-      "logger": "root",
-      "message": "No watermark to persist; leaving state unchanged.",
-      "timestamp": "2026-08-04T15:25:17.000Z"
     }
   ]
 }

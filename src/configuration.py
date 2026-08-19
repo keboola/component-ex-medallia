@@ -125,7 +125,7 @@ class RowConfiguration(BaseModel):
         "(usedOnPrograms); False (default) offers every field in the object's catalogue. Picker-only.",
     )
     load_type: LoadType = LoadType.incremental_load
-    incremental_field: str = Field(default="", description="Date/int field ID driving the incremental watermark.")
+    incremental_field: str = Field(default="", description="Date/int field ID the Start Date and End Date apply to.")
     initial_start: str = Field(
         default="",
         description="Start Date: ISO date, epoch seconds, or a relative expression (e.g. '5 days ago').",

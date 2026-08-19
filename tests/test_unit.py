@@ -3,7 +3,7 @@
 Pure in-memory unit coverage — no network, no datadir. Exercises the pieces documented in
 ``docs/superpowers/specs/2026-07-16-generic-query-api-redesign.md``:
 
-* ``client.medallia_client`` — ``flatten_node`` / ``row_hash`` / ``advance_watermark``,
+* ``client.medallia_client`` — ``flatten_node`` / ``row_hash``,
   ``GenericQueryBuilder``, the introspection classifiers, ``MedalliaClient`` (pagination,
   retries, errors) and ``MedalliaTokenManager``.
 * ``configuration`` — ``Configuration`` / ``RowConfiguration`` validation, ``parsed_filters``.
@@ -15,6 +15,7 @@ HTTP interactions are exercised via small in-memory stub sessions/token managers
 """
 
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -33,7 +34,6 @@ from client.medallia_client import (
     MedalliaClientError,
     MedalliaTokenManager,
     ObjectShape,
-    advance_watermark,
     flatten_node,
     list_extractable_objects,
     resolve_object_shape,
@@ -802,7 +802,7 @@ class TestSecretLeakGuard:
 
 
 # ==================================================================================================
-# 9. incremental capability + watermark helpers
+# 9. incremental capability + date-window helpers
 # ==================================================================================================
 
 
@@ -836,57 +836,6 @@ class TestIncrementalIsInt:
         assert Component._incremental_is_int(shape, "", {}) is False
 
 
-class TestAdvanceWatermark:
-    def test_numeric_max_when_is_int(self):
-        assert advance_watermark(5, 10, is_int=True) == 10
-        assert advance_watermark(10, 5, is_int=True) == 10
-
-    def test_ignores_non_numeric_candidate_when_is_int(self):
-        assert advance_watermark(10, "not-a-number", is_int=True) == 10
-
-    def test_ignores_none_candidate_when_is_int(self):
-        assert advance_watermark(10, None, is_int=True) == 10
-
-    def test_lexicographic_max_for_strings(self):
-        assert advance_watermark("2024-01-01", "2024-06-01", is_int=False) == "2024-06-01"
-        assert advance_watermark("2024-06-01", "2024-01-01", is_int=False) == "2024-06-01"
-
-    def test_current_unchanged_on_empty_candidate(self):
-        assert advance_watermark("2024-01-01", "", is_int=False) == "2024-01-01"
-
-    def test_current_unchanged_on_none_candidate(self):
-        assert advance_watermark("2024-01-01", None, is_int=False) == "2024-01-01"
-
-    def test_seeds_from_none_current_int(self):
-        assert advance_watermark(None, 7, is_int=True) == 7
-
-    def test_seeds_from_none_current_string(self):
-        assert advance_watermark(None, "2024-01-01", is_int=False) == "2024-01-01"
-
-    def test_mixed_str_current_int_candidate_compares_lexicographically(self):
-        # A str ``current`` against an int ``candidate`` (even with is_int=True) falls to the
-        # lexicographic branch, so "5" is (wrongly) kept over 10. This is why an INT seed must be
-        # coerced to int BEFORE it reaches advance_watermark (see Component._coerce_seed).
-        assert advance_watermark("5", 10, is_int=True) == "5"
-        # Once the seed is an int, comparison is numeric and the max wins as expected.
-        assert advance_watermark(5, 10, is_int=True) == 10
-
-
-class TestCoerceSeed:
-    def test_int_field_coerces_numeric_string_to_int(self):
-        assert Component._coerce_seed("5", is_int=True) == 5
-        assert Component._coerce_seed("1700000000", is_int=True) == 1700000000
-
-    def test_int_field_leaves_non_numeric_seed_unchanged(self):
-        assert Component._coerce_seed("not-a-number", is_int=True) == "not-a-number"
-
-    def test_non_int_field_leaves_seed_as_string(self):
-        assert Component._coerce_seed("2024-01-01", is_int=False) == "2024-01-01"
-
-    def test_int_seed_passthrough(self):
-        assert Component._coerce_seed(42, is_int=True) == 42
-
-
 class TestResolveInitialStart:
     def test_epoch_seconds_passthrough_int_field(self):
         assert Component._resolve_initial_start("1780272000", is_int=True) == 1780272000
@@ -916,7 +865,11 @@ class TestResolveInitialStart:
 
 
 class TestDateWindowDecoupling:
-    """Start Date / Date Field apply to BOTH load types; load type only sets the write mode."""
+    """The Start Date is the lower bound, on every run, for both load types.
+
+    Load type sets the write mode only. The component keeps no cursor, so what the
+    configuration says is what it loads — an edit takes effect on the very next run.
+    """
 
     def _row(self, **kw) -> RowConfiguration:
         base = dict(data_object="feedback", mode="structured", incremental_field="e_creationdate")
@@ -930,29 +883,92 @@ class TestDateWindowDecoupling:
         shape_no_filter = ObjectShape("x", SHAPE_SCALAR, True, False, False)
         assert Component._date_window_supported(self._row(), shape_no_filter) is False
 
-    def test_full_load_uses_start_date_and_ignores_stored_watermark(self, monkeypatch):
+    def test_full_load_uses_start_date(self):
         comp = object.__new__(Component)
-        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": "2099-01-01"})
         row = self._row(load_type="full_load", initial_start="2026-01-01")
         assert row.incremental is False
-        assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"  # Start Date, not the watermark
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
 
-    def test_incremental_resume_prefers_stored_watermark_over_start_date(self, monkeypatch):
+    def test_incremental_load_uses_start_date_too(self):
         comp = object.__new__(Component)
-        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": "2026-05-01"})
-        row = self._row(load_type="incremental_load", initial_start="2026-01-01")
-        assert comp._compute_lower_bound(row, is_int=False) == "2026-05-01"
-
-    def test_incremental_first_run_seeds_from_start_date(self, monkeypatch):
-        comp = object.__new__(Component)
-        monkeypatch.setattr(comp, "get_state_file", lambda: {})
         row = self._row(load_type="incremental_load", initial_start="2026-01-01")
         assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
 
-    def test_no_start_date_no_watermark_is_unbounded(self, monkeypatch):
+    def test_both_load_types_produce_the_same_bound(self):
         comp = object.__new__(Component)
-        monkeypatch.setattr(comp, "get_state_file", lambda: {})
+        full = comp._compute_lower_bound(self._row(load_type="full_load", initial_start="2026-03-04"), is_int=False)
+        incr = comp._compute_lower_bound(
+            self._row(load_type="incremental_load", initial_start="2026-03-04"), is_int=False
+        )
+        assert full == incr == "2026-03-04"
+
+    def test_no_start_date_is_unbounded(self):
+        comp = object.__new__(Component)
         assert comp._compute_lower_bound(self._row(load_type="full_load"), is_int=False) is None
+
+    def test_no_start_date_warns_that_all_history_will_load(self, caplog):
+        comp = object.__new__(Component)
+        with caplog.at_level(logging.WARNING):
+            assert comp._compute_lower_bound(self._row(load_type="incremental_load"), is_int=False) is None
+        assert "entire history" in caplog.text
+
+
+class TestStartDateIsHonouredEveryRun:
+    """Regression cover for the reported data loss and the ignored-edit complaint.
+
+    Previously the component stored the newest value it had seen and resumed from that, so
+    (a) editing the Start Date changed nothing after the first run, and (b) a record that
+    surfaced in Medallia after its own date had been passed could never be requested again.
+    Both follow from the same cause, and both are gone once the Start Date always applies.
+    """
+
+    def _row(self, **kw) -> RowConfiguration:
+        base = dict(
+            data_object="feedback",
+            mode="structured",
+            incremental_field="e_creationdate",
+            load_type="incremental_load",
+        )
+        base.update(kw)
+        return RowConfiguration(**base)
+
+    def test_editing_the_start_date_takes_effect_immediately(self):
+        comp = object.__new__(Component)
+        assert comp._compute_lower_bound(self._row(initial_start="yesterday"), is_int=False) is not None
+        # The operator widens the window; the very next run must obey, with no reset required.
+        with freeze_time("2026-08-19T14:00:00+00:00"):
+            assert comp._compute_lower_bound(self._row(initial_start="5 days ago"), is_int=False) == "2026-08-14"
+
+    def test_a_rolling_start_date_re_reads_its_own_window(self):
+        # The window is recomputed from "now" every run, so it always covers the last N days —
+        # which is what lets a late-arriving record be picked up instead of being skipped.
+        comp = object.__new__(Component)
+        with freeze_time("2026-08-19T14:00:00+00:00"):
+            assert comp._compute_lower_bound(self._row(initial_start="5 days ago"), is_int=False) == "2026-08-14"
+        with freeze_time("2026-08-20T14:00:00+00:00"):
+            assert comp._compute_lower_bound(self._row(initial_start="5 days ago"), is_int=False) == "2026-08-15"
+
+    def test_a_record_dated_before_the_window_is_still_reachable_by_widening_it(self):
+        # A survey created 2026-07-08 that only completes weeks later. Under a 5-day window it is
+        # out of range; widening the Start Date brings it back on the next run — no state to clear.
+        comp = object.__new__(Component)
+        late = "2026-07-08"
+        with freeze_time("2026-08-19T14:00:00+00:00"):
+            narrow = comp._compute_lower_bound(self._row(initial_start="5 days ago"), is_int=False)
+            widened = comp._compute_lower_bound(self._row(initial_start="2026-07-01"), is_int=False)
+        assert str(late) < str(narrow)
+        assert str(late) >= str(widened)
+
+    def test_the_component_never_reads_or_writes_state(self, monkeypatch):
+        # The strongest form of "no cursor": touching state at all is now a bug.
+        comp = object.__new__(Component)
+
+        def boom(*_args, **_kwargs):
+            raise AssertionError("the component must not touch state any more")
+
+        monkeypatch.setattr(comp, "get_state_file", boom)
+        monkeypatch.setattr(comp, "write_state_file", boom)
+        assert comp._compute_lower_bound(self._row(initial_start="2026-01-01"), is_int=False) == "2026-01-01"
 
 
 class TestUpperBound:
@@ -1636,7 +1652,7 @@ class TestListFieldsCustomers:
         comp = _bare_component(monkeypatch, row, client, shape)
         elements = Component.list_fields.__wrapped__(comp)
         assert {e.value for e in elements} == {"c_email", "c_created", "c_lastseen", "c_loyalty", "c_nps", "c_name"}
-        assert {e.value: e.label for e in elements}["c_created"] == "Created Date"
+        assert {e.value: e.label for e in elements}["c_created"] == "Created Date (c_created)"
 
 
 class _PagingMetadataClient:
@@ -1779,10 +1795,25 @@ class TestListDateFields:
         values = {e.value for e in Component.list_date_fields.__wrapped__(comp)}
         assert "c_nps" not in values
 
-    def test_labels_are_field_names(self, monkeypatch):
+    def test_labels_pair_the_name_with_the_api_id(self, monkeypatch):
+        # Medallia's docs, filters and error messages all speak in field ids, so the picker shows
+        # both — otherwise choosing the right field means translating between name and id by hand.
         comp, _ = self._component(monkeypatch)
         labels = {e.value: e.label for e in Component.list_date_fields.__wrapped__(comp)}
-        assert labels["c_lastseen"] == "Last Seen"
+        assert labels["c_lastseen"] == "Last Seen (c_lastseen)"
+
+    @pytest.mark.parametrize(
+        ("field_id", "name", "expected"),
+        [
+            ("e_initialfinishdate", "Initial Finish Date", "Initial Finish Date (e_initialfinishdate)"),
+            ("e_nps", None, "e_nps"),  # instance reports no name
+            ("e_nps", "", "e_nps"),  # …or an empty one
+            ("e_nps", "   ", "e_nps"),  # …or only whitespace
+            ("email", "email", "email"),  # name identical to the id — don't print it twice
+        ],
+    )
+    def test_field_label_forms(self, field_id, name, expected):
+        assert Component._field_label(field_id, name) == expected
 
     def test_routed_to_customer_schema_not_global_fields_catalogue(self, monkeypatch):
         comp, client = self._component(monkeypatch)
@@ -1885,36 +1916,6 @@ class TestValidateQuery:
         two = {"feedback": {"nodes": [], "pageInfo": {}}, "customers": {"nodes": [], "pageInfo": {}}}
         with pytest.raises(UserException, match="exactly one connection"):
             Component._raw_connection(two)
-
-
-# ---------------------------------------------------------------------------------------------
-# Watermark normalisation (persisted value must match the day-granular bound format the query
-# builder emits — a DATE/DATETIME field's value carries a time part that Medallia's date filter
-# never produces itself).
-# ---------------------------------------------------------------------------------------------
-class TestNormalizeWatermark:
-    def test_int_watermark_passes_through(self):
-        assert Component._normalize_watermark(1785551000, is_int=True) == 1785551000
-
-    def test_none_passes_through(self):
-        assert Component._normalize_watermark(None, is_int=False) is None
-
-    def test_datetime_with_space_floored_to_day(self):
-        # The exact live case from the smoke config: a persisted DATETIME watermark.
-        assert Component._normalize_watermark("2026-07-26 23:30:11", is_int=False) == "2026-07-26"
-
-    def test_iso_t_and_trailing_zone_floored_to_day(self):
-        assert Component._normalize_watermark("2026-07-26T23:30:11Z", is_int=False) == "2026-07-26"
-
-    def test_date_only_string_is_unchanged(self):
-        assert Component._normalize_watermark("2026-07-26", is_int=False) == "2026-07-26"
-
-    def test_non_iso_but_parseable_is_floored(self):
-        assert Component._normalize_watermark("July 26, 2026", is_int=False) == "2026-07-26"
-
-    def test_unparseable_string_left_as_is(self):
-        # Never raise on an unexpected format — leave the value untouched rather than lose state.
-        assert Component._normalize_watermark("not-a-date", is_int=False) == "not-a-date"
 
 
 # ---------------------------------------------------------------------------------------------

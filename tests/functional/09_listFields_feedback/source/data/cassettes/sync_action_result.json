@@ -1,1 +1,38 @@
-[{"value": "a_surveyid", "label": "Survey ID"}, {"value": "a_customerid", "label": "Customer ID"}, {"value": "e_creationdate", "label": "Creation Date"}, {"value": "e_accepteddate", "label": "Accepted Date"}, {"value": "a_initial_finish_timestamp", "label": "Initial Finish Timestamp"}, {"value": "a_recognition_sentiment_types", "label": "Recognition Sentiment Types"}, {"value": "e_nps", "label": "NPS Score"}, {"value": "e_comment", "label": "Comment"}, {"value": "a_survey_channel", "label": "Survey Channel"}]
+[
+  {
+    "value": "a_surveyid",
+    "label": "Survey ID (a_surveyid)"
+  },
+  {
+    "value": "a_customerid",
+    "label": "Customer ID (a_customerid)"
+  },
+  {
+    "value": "e_creationdate",
+    "label": "Creation Date (e_creationdate)"
+  },
+  {
+    "value": "e_accepteddate",
+    "label": "Accepted Date (e_accepteddate)"
+  },
+  {
+    "value": "a_initial_finish_timestamp",
+    "label": "Initial Finish Timestamp (a_initial_finish_timestamp)"
+  },
+  {
+    "value": "a_recognition_sentiment_types",
+    "label": "Recognition Sentiment Types (a_recognition_sentiment_types)"
+  },
+  {
+    "value": "e_nps",
+    "label": "NPS Score (e_nps)"
+  },
+  {
+    "value": "e_comment",
+    "label": "Comment (e_comment)"
+  },
+  {
+    "value": "a_survey_channel",
+    "label": "Survey Channel (a_survey_channel)"
+  }
+]
