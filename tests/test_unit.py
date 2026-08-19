@@ -14,7 +14,9 @@ HTTP interactions are exercised via small in-memory stub sessions/token managers
 ``requests`` calls.
 """
 
+import csv
 import json
+import re
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -970,28 +972,6 @@ class TestLookback:
         monkeypatch.setattr(comp, "get_state_file", lambda: state)
         return comp
 
-    def test_late_arriving_record_is_missed_without_lookback_and_recovered_with_it(self, monkeypatch):
-        """Reproduces the reported data loss.
-
-        A survey created 2026-07-08 is only completed — and so only enters the ``feedback``
-        view — after the watermark has already advanced to 2026-07-10. Today's behaviour asks
-        Medallia for ``gte 2026-07-10``, which that record can never match. A Look Back widens
-        the resumed bound far enough back to ask for it again.
-        """
-        late_record_date = "2026-07-08"
-
-        without = self._comp(monkeypatch, "2026-07-10")._compute_lower_bound(
-            self._row(load_type="incremental_load"), is_int=False
-        )
-        assert without == "2026-07-10"
-        assert late_record_date < without  # the record is outside the window: silently lost
-
-        with_lookback = self._comp(monkeypatch, "2026-07-10")._compute_lower_bound(
-            self._row(load_type="incremental_load", lookback="7 days"), is_int=False
-        )
-        assert with_lookback == "2026-07-03"
-        assert late_record_date >= with_lookback  # now inside the window: recovered
-
     def test_lookback_shifts_date_watermark(self, monkeypatch):
         comp = self._comp(monkeypatch, "2026-05-10")
         row = self._row(load_type="incremental_load", lookback="2 days")
@@ -1027,12 +1007,116 @@ class TestLookback:
         with pytest.raises(UserException, match="Could not parse 'Look Back'"):
             comp._compute_lower_bound(row, is_int=False)
 
+    def test_unparseable_lookback_is_caught_on_the_first_run_too(self, monkeypatch):
+        # Validated up front, so a typo fails immediately instead of lying dormant until the
+        # first run that actually resumes from a saved position.
+        comp = self._comp(monkeypatch, None)
+        row = self._row(load_type="incremental_load", initial_start="2026-01-01", lookback="nonsense")
+        with pytest.raises(UserException, match="Could not parse 'Look Back'"):
+            comp._compute_lower_bound(row, is_int=False)
+
+    def test_non_numeric_saved_position_on_an_int_field_fails_visibly(self, monkeypatch):
+        # Raising bare here would exit 2 as an "application" error whose stderr Keboola hides.
+        comp = self._comp(monkeypatch, "2026-05-10")
+        row = self._row(load_type="incremental_load", lookback="2 days")
+        with pytest.raises(UserException, match="not a number"):
+            comp._compute_lower_bound(row, is_int=True)
+
     def test_lookback_duration_is_independent_of_wall_clock(self):
         with freeze_time("2026-07-16T12:00:00+00:00"):
             first = Component._parse_lookback("3 days")
         with freeze_time("2027-02-01T23:59:00+00:00"):
             second = Component._parse_lookback("3 days")
         assert first == second == timedelta(days=3)
+
+
+class TestLateArrivingRecordRegression:
+    """End-to-end reproduction of the reported data loss.
+
+    Drives the real extraction path — filter construction, a fake Medallia that honours that
+    filter, the CSV writer and the state write — rather than asserting on a bound in isolation.
+
+    Scenario: a survey is created 2026-07-08 but only completes (and so only enters the
+    ``feedback`` view) after the watermark has advanced to 2026-07-10.
+    """
+
+    LATE = {"id": "late-1", "e_creationdate": "2026-07-08", "a_score": "9"}
+    FRESH = {"id": "fresh-1", "e_creationdate": "2026-07-11", "a_score": "7"}
+
+    def _extract(self, tmp_path, monkeypatch, lookback: str):
+        """Run one incremental resume against a fake Medallia; return (rows, filter, watermark)."""
+        from client.medallia_client import GenericQueryBuilder
+
+        row = RowConfiguration(
+            data_object="feedback",
+            mode="structured",
+            incremental_field="e_creationdate",
+            load_type="incremental_load",
+            lookback=lookback,
+        )
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": "2026-07-10"})
+
+        lower = comp._compute_lower_bound(row, is_int=False)
+        builder = GenericQueryBuilder(
+            object_name="feedback",
+            node_shape=SHAPE_DATA,
+            selected_fields=["e_creationdate", "a_score"],
+            scalar_fields=["id", "e_creationdate", "a_score"],
+            incremental_field="e_creationdate",
+            filter_tree=None,
+            supports_filter=True,
+            supports_order=True,
+            has_id=True,
+        )
+        query = builder.build_query(lower, "2026-07-12")
+
+        # Fake Medallia: return only records the emitted gte bound actually admits.
+        match = re.search(r'gte:\s*"([^"]+)"', query)
+        assert match is not None, f"no gte clause was emitted into the query: {query}"
+        gte = match.group(1)
+        served = [n for n in (self.LATE, self.FRESH) if n["e_creationdate"] >= gte]
+
+        csv_path = tmp_path / f"feedback_{lookback or 'none'}.csv"
+        watermark = comp._write_rows(
+            str(csv_path), ["id", "e_creationdate", "a_score"], served, True, "e_creationdate", False, lower
+        )
+        with open(csv_path, encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        return rows, gte, comp._clamp_watermark(comp._normalize_watermark(watermark, False), False)
+
+    def test_without_lookback_the_late_record_is_lost(self, tmp_path, monkeypatch):
+        rows, gte, watermark = self._extract(tmp_path, monkeypatch, lookback="")
+        assert gte == "2026-07-10"
+        ids = [r["id"] for r in rows]
+        assert ids == ["fresh-1"], "the late-arriving record is silently absent from the output"
+        assert watermark == "2026-07-11"  # and the cursor moves past it, forever
+
+    def test_with_lookback_the_late_record_is_recovered(self, tmp_path, monkeypatch):
+        rows, gte, watermark = self._extract(tmp_path, monkeypatch, lookback="7 days")
+        assert gte == "2026-07-03"
+        ids = sorted(r["id"] for r in rows)
+        assert ids == ["fresh-1", "late-1"], "the late-arriving record is recovered"
+        assert watermark == "2026-07-11"  # the cursor still advances normally
+
+    def test_lookback_run_returning_nothing_does_not_rewind_the_cursor(self, tmp_path, monkeypatch):
+        """The drift guard: an empty Look Back run must not persist the shifted-back bound."""
+        row = RowConfiguration(
+            data_object="feedback",
+            mode="structured",
+            incremental_field="e_creationdate",
+            load_type="incremental_load",
+            lookback="7 days",
+        )
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": "2026-07-10"})
+        lower = comp._compute_lower_bound(row, is_int=False)
+        assert lower == "2026-07-03"
+
+        csv_path = tmp_path / "empty.csv"
+        watermark = comp._write_rows(str(csv_path), ["id", "e_creationdate"], [], True, "e_creationdate", False, lower)
+        assert watermark == "2026-07-03"  # _write_rows hands back the seed unchanged
+        assert comp._clamp_watermark(comp._normalize_watermark(watermark, False), False) == "2026-07-10"
 
 
 class TestReprocessRange:
@@ -1058,6 +1142,14 @@ class TestReprocessRange:
         comp = self._comp(monkeypatch, "2026-08-19")
         row = self._row(load_type="incremental_load", initial_start="2026-07-27", reprocess_range=True)
         assert comp._compute_lower_bound(row, is_int=False) == "2026-07-27"
+
+    def test_on_without_a_start_date_is_refused_rather_than_pulling_all_history(self, monkeypatch):
+        # Falling through to an unbounded lower bound here would silently re-pull the object's
+        # entire history on a tenant that already has a perfectly good saved position.
+        comp = self._comp(monkeypatch, "2026-08-19")
+        row = self._row(load_type="incremental_load", reprocess_range=True)
+        with pytest.raises(UserException, match="Reload the dates above"):
+            comp._compute_lower_bound(row, is_int=False)
 
 
 class TestWatermarkClamp:
@@ -1096,6 +1188,12 @@ class TestWatermarkClamp:
     def test_none_watermark_stays_none(self, monkeypatch):
         comp = self._comp(monkeypatch, "2026-08-19")
         assert comp._clamp_watermark(None, is_int=False) is None
+
+    def test_a_legacy_timestamp_in_state_still_heals_to_day_granularity(self, monkeypatch):
+        # State written before watermarks were day-floored holds a full timestamp. Clamping to it
+        # verbatim would reinstate that format permanently, defeating the self-heal.
+        comp = self._comp(monkeypatch, "2026-08-19 23:30:11")
+        assert comp._clamp_watermark("2026-08-19", is_int=False) == "2026-08-19"
 
 
 class TestNewRowOptionsAreBackwardsCompatible:

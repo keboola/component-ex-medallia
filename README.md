@@ -95,10 +95,12 @@ Two ways out, and they compose:
   epoch-seconds K-field derived from it). Medallia's own reference extractor does this and needs
   no overlap at all.
 - **Where that is not available:** set **Look Back** wide enough to cover the lag between a record
-  being created and becoming queryable. Medallia advises allowing
-  [~10 hours for a period to be complete](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-by-date-ranges);
-  a creation-date watermark needs considerably more. Re-read rows are matched on the primary key,
-  so overlap costs API calls, not duplicates.
+  being created and becoming queryable. Medallia advises
+  [waiting ~10 hours after a period ends before querying it](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-by-date-ranges),
+  which makes 10 hours a reasonable floor — but that guidance is about when a fixed window settles,
+  not about overlap, so size the actual value from your own data. With a creation-date watermark the
+  gap is however long respondents take to answer, which can be weeks. Re-read rows are matched on
+  the primary key, so overlap costs API calls, not duplicates.
 
 To recover a period that was already missed, set **Start Date** / **End Date** to that period and
 turn on **Reload the dates above** for one run, then turn it off again. Your saved position is not

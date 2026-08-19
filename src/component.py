@@ -719,6 +719,16 @@ class Component(ComponentBase):
         For an INT field the value is coerced to ``int`` so the first ``advance_watermark`` call
         compares numerically rather than lexicographically.
         """
+        # Validate Look Back on EVERY run, not only on a resume: otherwise a typo sits inert
+        # through the first run and only fails the day the row starts resuming.
+        if row.lookback.strip():
+            self._parse_lookback(row.lookback)
+        if row.incremental and row.reprocess_range and not row.initial_start.strip():
+            raise UserException(
+                "'Reload the dates above' is on but no Start Date is set, which would reload the "
+                "object's entire history. Set a Start Date (and usually an End Date) to the period "
+                "you want to reload, or turn the option off to continue from the saved position."
+            )
         if row.incremental and not row.reprocess_range:
             stored = self._stored_watermark()
             if stored is not None and str(stored) != "":
@@ -805,7 +815,17 @@ class Component(ComponentBase):
             return bound
         delta = cls._parse_lookback(lookback)
         if is_int:
-            shifted: int | str = max(0, int(bound) - int(delta.total_seconds()))
+            try:
+                shifted: int | str = max(0, int(bound) - int(delta.total_seconds()))
+            except (TypeError, ValueError):  # fmt: skip
+                # An INT field whose stored watermark is not numeric (a Date Field swapped between
+                # runs, or hand-edited state). Raising bare would exit 2 as an "application" error
+                # whose stderr Keboola hides from the user; make it visible and fixable instead.
+                raise UserException(
+                    f"Cannot apply Look Back: the saved position {bound!r} is not a number, but the "
+                    "Date Field is numeric — the Date Field has most likely been changed since the "
+                    "last run. Reset the configuration state, or change the Date Field back."
+                ) from None
         else:
             parsed = dateparser.parse(
                 str(bound), settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False}
@@ -893,7 +913,11 @@ class Component(ComponentBase):
         stored = self._stored_watermark()
         if stored is None or str(stored) == "":
             return watermark
-        clamped = advance_watermark(watermark, self._coerce_seed(stored, is_int), is_int)
+        # Normalise the stored value before comparing: a pre-day-flooring image (or hand-edited
+        # state) can hold a full timestamp, and clamping to it verbatim would reinstate the very
+        # format _normalize_watermark exists to heal, permanently.
+        stored_normalized = self._normalize_watermark(self._coerce_seed(stored, is_int), is_int)
+        clamped = advance_watermark(watermark, stored_normalized, is_int)
         if clamped != watermark:
             logging.info("Keeping the stored watermark (%s); this run's range ended earlier.", clamped)
         return clamped
