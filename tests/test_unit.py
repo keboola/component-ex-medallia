@@ -1652,7 +1652,7 @@ class TestListFieldsCustomers:
         comp = _bare_component(monkeypatch, row, client, shape)
         elements = Component.list_fields.__wrapped__(comp)
         assert {e.value for e in elements} == {"c_email", "c_created", "c_lastseen", "c_loyalty", "c_nps", "c_name"}
-        assert {e.value: e.label for e in elements}["c_created"] == "Created Date"
+        assert {e.value: e.label for e in elements}["c_created"] == "Created Date (c_created)"
 
 
 class _PagingMetadataClient:
@@ -1795,10 +1795,25 @@ class TestListDateFields:
         values = {e.value for e in Component.list_date_fields.__wrapped__(comp)}
         assert "c_nps" not in values
 
-    def test_labels_are_field_names(self, monkeypatch):
+    def test_labels_pair_the_name_with_the_api_id(self, monkeypatch):
+        # Medallia's docs, filters and error messages all speak in field ids, so the picker shows
+        # both — otherwise choosing the right field means translating between name and id by hand.
         comp, _ = self._component(monkeypatch)
         labels = {e.value: e.label for e in Component.list_date_fields.__wrapped__(comp)}
-        assert labels["c_lastseen"] == "Last Seen"
+        assert labels["c_lastseen"] == "Last Seen (c_lastseen)"
+
+    @pytest.mark.parametrize(
+        ("field_id", "name", "expected"),
+        [
+            ("e_initialfinishdate", "Initial Finish Date", "Initial Finish Date (e_initialfinishdate)"),
+            ("e_nps", None, "e_nps"),  # instance reports no name
+            ("e_nps", "", "e_nps"),  # …or an empty one
+            ("e_nps", "   ", "e_nps"),  # …or only whitespace
+            ("email", "email", "email"),  # name identical to the id — don't print it twice
+        ],
+    )
+    def test_field_label_forms(self, field_id, name, expected):
+        assert Component._field_label(field_id, name) == expected
 
     def test_routed_to_customer_schema_not_global_fields_catalogue(self, monkeypatch):
         comp, client = self._component(monkeypatch)

@@ -1112,8 +1112,20 @@ class Component(ComponentBase):
                 continue
             if date_only and not self._is_date_candidate(node):
                 continue
-            elements.append(SelectElement(value=field_id, label=node.get("name") or field_id))
+            elements.append(SelectElement(value=field_id, label=self._field_label(field_id, node.get("name"))))
         return elements
+
+    @staticmethod
+    def _field_label(field_id: str, name: str | None) -> str:
+        """Picker label pairing the human name with the API id — ``Initial Finish Date (e_...)``.
+
+        Medallia's own docs, filters and error messages all speak in field ids, so showing the
+        name alone forces the reader to translate between the two while picking. Showing both
+        also makes the list searchable either way. Degrades to the bare id when the instance
+        reports no name, or reports a name identical to the id.
+        """
+        display = (name or "").strip()
+        return f"{display} ({field_id})" if display and display != field_id else field_id
 
     @staticmethod
     def _scalar_field_elements(shape: ObjectShape, date_only: bool) -> list[SelectElement]:

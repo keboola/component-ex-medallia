@@ -68,7 +68,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "Each field you pick becomes one column in the output table. The list reloads when you change the object or the toggle above. Leave empty to take every available field."
+        "tooltip": "Each field you pick becomes one column in the output table. Fields are listed as `Name (api_id)` — the id is what Medallia's own documentation and filters use, so you can search the list by either. The list reloads when you change the object or the toggle above. Leave empty to take every available field."
       },
       "propertyOrder": 30
     },

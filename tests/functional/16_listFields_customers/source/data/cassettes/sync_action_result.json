@@ -1,1 +1,14 @@
-[{"value": "email", "label": "Email"}, {"value": "first_name", "label": "First name"}, {"value": "last_name", "label": "Last name"}]
+[
+  {
+    "value": "email",
+    "label": "Email (email)"
+  },
+  {
+    "value": "first_name",
+    "label": "First name (first_name)"
+  },
+  {
+    "value": "last_name",
+    "label": "Last name (last_name)"
+  }
+]

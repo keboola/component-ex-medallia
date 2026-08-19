@@ -98,8 +98,8 @@ so treat that as the floor and size the rest from your own data.
 |--------------------------|------------------|-------------------------------------------------------------|
 | Test Connection          | `testConnection` | Validate the OAuth credentials.                             |
 | Load Objects             | `listObjects`    | List the queryable objects on the instance.                |
-| Load Fields              | `listFields`     | List a selected object's fields by name.                   |
-| Load Date Fields         | `listDateFields` | List date/int fields usable for the date window.           |
+| Load Fields              | `listFields`     | List a selected object's fields as `Name (api_id)`.        |
+| Load Date Fields         | `listDateFields` | Date/int fields for the date window, as `Name (api_id)`.   |
 | Validate & Preview Query | `validateQuery`  | Validate a raw GraphQL query.                              |
 
 ## Output
