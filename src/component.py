@@ -402,6 +402,8 @@ except ImportError:  # pragma: no cover - production image has no dev dependenci
 STATE_LAST_INCREMENTAL_VALUE = "last_incremental_value"
 # Sentinel for "the state file has not been read yet" — distinct from a genuinely absent watermark.
 _UNREAD = object()
+# A Look Back must name its unit; see _parse_lookback for why a bare number is refused.
+_LOOKBACK_UNIT_RE = re.compile(r"\b(second|minute|hour|day|week|month|year)s?\b", re.IGNORECASE)
 
 # validateQuery row-preview limits (kept small — one gentle live page shown in the config UI).
 _PREVIEW_ROWS = 5
@@ -782,6 +784,14 @@ class Component(ComponentBase):
         duration — the same config always yields the same shift, independent of when the job runs.
         """
         text = value.strip()
+        # dateparser happily reads a unit-less string as a date and yields a huge duration ("2"
+        # resolves to ~5 months, not 2 days), which would silently re-read months of data on every
+        # run against a metered API. Require an explicit unit before handing it over.
+        if not _LOOKBACK_UNIT_RE.search(text):
+            raise UserException(
+                f"'Look Back' value {text!r} is missing a time unit. Write how far back to go "
+                "including the unit — for example '2 days', '36 hours' or '1 week'."
+            )
         expression = text if text.lower().endswith("ago") else f"{text} ago"
         reference = datetime(2000, 1, 1, tzinfo=UTC)
         parsed = dateparser.parse(
@@ -830,9 +840,15 @@ class Component(ComponentBase):
             parsed = dateparser.parse(
                 str(bound), settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False}
             )
-            if parsed is None:  # a format nothing else produces; leave the bound untouched
-                logging.warning("Could not apply Look Back to watermark %r; resuming at it unchanged.", bound)
-                return bound
+            if parsed is None:
+                # Silently resuming at the unshifted bound would leave Look Back switched on but
+                # doing nothing — the exact silent-loss shape this option exists to remove. Fail
+                # visibly instead, matching the INT branch above.
+                raise UserException(
+                    f"Cannot apply Look Back: the saved position {bound!r} is not a date the "
+                    "component can read. Reset the configuration state so the next run starts "
+                    "from the Start Date, or turn Look Back off."
+                )
             shifted = (parsed - delta).strftime("%Y-%m-%d")
         logging.info("Look Back %s applied: resuming from %s instead of %s.", lookback.strip(), shifted, bound)
         return shifted

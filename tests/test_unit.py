@@ -1004,6 +1004,13 @@ class TestLookback:
     def test_unparseable_lookback_raises_user_exception(self, monkeypatch):
         comp = self._comp(monkeypatch, "2026-05-10")
         row = self._row(load_type="incremental_load", lookback="not a duration")
+        with pytest.raises(UserException, match="missing a time unit"):
+            comp._compute_lower_bound(row, is_int=False)
+
+    def test_a_zero_duration_is_refused(self, monkeypatch):
+        # Names a unit, so it clears the unit guard and must be caught by the positivity check.
+        comp = self._comp(monkeypatch, "2026-05-10")
+        row = self._row(load_type="incremental_load", lookback="0 days")
         with pytest.raises(UserException, match="Could not parse 'Look Back'"):
             comp._compute_lower_bound(row, is_int=False)
 
@@ -1012,7 +1019,30 @@ class TestLookback:
         # first run that actually resumes from a saved position.
         comp = self._comp(monkeypatch, None)
         row = self._row(load_type="incremental_load", initial_start="2026-01-01", lookback="nonsense")
-        with pytest.raises(UserException, match="Could not parse 'Look Back'"):
+        with pytest.raises(UserException, match="missing a time unit"):
+            comp._compute_lower_bound(row, is_int=False)
+
+    @pytest.mark.parametrize("value", ["2", "7", "ago", "\x00", "recently"])
+    def test_lookback_without_a_unit_is_refused(self, monkeypatch, value):
+        # dateparser reads a bare "2" as a date and returns a ~5-month duration; accepting that
+        # would silently re-read months of data every run against a metered API.
+        comp = self._comp(monkeypatch, "2026-05-10")
+        row = self._row(load_type="incremental_load", lookback=value)
+        with pytest.raises(UserException, match="missing a time unit"):
+            comp._compute_lower_bound(row, is_int=False)
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("2 days", timedelta(days=2)), ("36 hours", timedelta(hours=36)), ("1 week", timedelta(weeks=1))],
+    )
+    def test_valid_units_still_parse(self, value, expected):
+        assert Component._parse_lookback(value) == expected
+
+    def test_unreadable_saved_position_on_a_date_field_fails_visibly(self, monkeypatch):
+        # Look Back must never be silently inert — that is the failure shape it exists to remove.
+        comp = self._comp(monkeypatch, "not-a-date-at-all")
+        row = self._row(load_type="incremental_load", lookback="2 days")
+        with pytest.raises(UserException, match="not a date the component can read"):
             comp._compute_lower_bound(row, is_int=False)
 
     def test_non_numeric_saved_position_on_an_int_field_fails_visibly(self, monkeypatch):
