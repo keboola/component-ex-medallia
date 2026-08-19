@@ -14,7 +14,6 @@ of a GENERIC, introspection-driven extractor (no feedback-specific code):
   throttling (``X-RateLimit-*``), exponential backoff on 429/5xx, a single 401 re-mint, and a
   Relay cursor paginator driven by ``pageInfo.hasNextPage`` (never ``totalCount``).
 * pure helpers ``flatten_node`` (shape-detecting), ``row_hash`` (id-less PK) and
-  ``advance_watermark`` (single-scalar incremental cursor).
 
 Neither the client secret nor the access token is ever logged.
 """
@@ -848,27 +847,3 @@ def row_hash(row: Mapping[str, Any]) -> str:
     material = {key: ("" if value is None else str(value)) for key, value in row.items() if key != "_row_hash"}
     canonical = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def advance_watermark(current: int | str | None, candidate_raw: Any, is_int: bool) -> int | str | None:
-    """Return the max of ``current`` and a row's incremental-field value (spec §8).
-
-    ``is_int`` selects numeric vs. lexicographic (ISO string) comparison. An unusable candidate
-    (missing / non-numeric for an int field) leaves the watermark unchanged.
-    """
-    if candidate_raw is None or candidate_raw == "":
-        return current
-    if is_int:
-        try:
-            candidate: int | str = int(candidate_raw)
-        except (TypeError, ValueError):  # fmt: skip
-            return current
-    else:
-        candidate = str(candidate_raw)
-    if current is None:
-        return candidate
-    if isinstance(candidate, int) and isinstance(current, int):
-        return candidate if candidate > current else current
-    # ISO strings compare lexicographically; a mixed pair (a field format changed between runs)
-    # falls back to a string compare so the guard never raises.
-    return candidate if str(candidate) > str(current) else current

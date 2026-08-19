@@ -3,9 +3,9 @@
 Thin orchestrator (spec §9): it loads and validates configuration, builds the separated
 GraphQL client, and — depending on the row ``mode`` — either extracts one introspection-
 resolved object (structured mode) or drives a user-authored Relay query (raw mode). Every
-object is paged via ``pageInfo.hasNextPage`` with ``first``/``after`` as GraphQL variables;
-structured incremental rows persist a single-scalar watermark in ``state.json`` only after a
-successful table write. There is a SINGLE generic code path — no feedback-specific branch.
+object is paged via ``pageInfo.hasNextPage`` with ``first``/``after`` as GraphQL variables.
+The date window comes from the row's Start/End Date on every run — the component keeps no
+cursor and no state. There is a SINGLE generic code path — no feedback-specific branch.
 """
 
 import csv
@@ -35,7 +35,6 @@ from client import (
     MedalliaClientError,
     MedalliaTokenManager,
     ObjectShape,
-    advance_watermark,
     flatten_node,
     list_extractable_objects,
     resolve_object_shape,
@@ -399,7 +398,6 @@ except ImportError:  # pragma: no cover - production image has no dev dependenci
     VCR_SANITIZERS = []
 
 # state.json key for the single-scalar incremental watermark (spec §8).
-STATE_LAST_INCREMENTAL_VALUE = "last_incremental_value"
 
 # validateQuery row-preview limits (kept small — one gentle live page shown in the config UI).
 _PREVIEW_ROWS = 5
@@ -573,21 +571,8 @@ class Component(ComponentBase):
         # Write mode follows the load type: incremental → upsert per PK; full → overwrite.
         table = self._build_table_definition(table_name, fieldnames, shape, field_meta, row.incremental)
         nodes = client.fetch_object(row.data_object, query, row.page_size, after_type=shape.after_type)
-        max_watermark = self._write_rows(
-            table.full_path, fieldnames, nodes, shape.has_id, row.incremental_field, is_int, lower_bound
-        )
+        self._write_rows(table.full_path, fieldnames, nodes, shape.has_id)
         self.write_manifest(table)
-        # Persist the watermark ONLY for an incremental load whose date window was actually applied.
-        # An unbounded load (no Date Field, or an object with no filter/orderBy support) advances a
-        # watermark the next run never reads back — persisting it would only leave dead state. A full
-        # load re-applies the Start Date each run and never resumes, so it persists nothing either.
-        watermark: int | str | None = None
-        if row.incremental:
-            if windowed:
-                watermark = self._normalize_watermark(max_watermark, is_int)
-            else:
-                logging.info("Load ran unbounded (no date window applied); not persisting a watermark.")
-        self._save_incremental_state(row, watermark)
 
     def _run_raw(self, client: MedalliaClient, row: RowConfiguration) -> None:
         if not row.raw_query.strip():
@@ -698,21 +683,31 @@ class Component(ComponentBase):
         return shape.scalar_fields.get(field_id) == "Int"
 
     def _compute_lower_bound(self, row: RowConfiguration, is_int: bool) -> int | str | None:
-        """Fetch lower bound. Incremental resumes from the stored watermark when present; otherwise
-        (a full load, or an incremental first run) the Start Date is used. None → no lower bound.
+        """Lower bound = the Start Date, on every run. Empty Start Date → no lower bound.
 
-        For an INT field the value is coerced to ``int`` so the first ``advance_watermark`` call
-        compares numerically rather than lexicographically.
+        The Start Date is what the configuration says to load from, so that is what the component
+        loads from — every run, whatever the load type. Set it to ``5 days ago`` and every run
+        starts five days ago; change it and the next run obeys immediately.
+
+        This is deliberately the whole rule. The component used to remember the newest value it
+        had loaded and resume from that instead, which meant an edit to the Start Date was
+        silently discarded on every run but the first. It also lost records permanently whenever
+        one surfaced in Medallia after its own date had already been passed — a routine event,
+        since ``feedback`` only admits a record once it is completed, long after its creation
+        date. A rolling Start Date has neither problem: the window re-reads itself, so a late
+        record is picked up next run, and rows are matched on the primary key so nothing
+        duplicates. The Start Date is therefore also the safety margin — set it as far back as
+        records can realistically arrive late.
         """
-        if row.incremental:
-            stored = (self.get_state_file() or {}).get(STATE_LAST_INCREMENTAL_VALUE)
-            if stored is not None and str(stored) != "":
-                logging.info("Resuming from stored watermark (%s).", stored)
-                return self._coerce_seed(stored, is_int)
         if row.initial_start.strip():
-            logging.info("Applying Start Date lower bound.")
+            logging.info("Loading from the Start Date (%s).", row.initial_start.strip())
             return self._resolve_initial_start(row.initial_start, is_int)
-        logging.info("No Start Date and no stored watermark; loading the object unbounded.")
+        if row.incremental_field:
+            logging.warning(
+                "No Start Date is set, so every run loads this object's entire history. Set a "
+                "Start Date (for example '5 days ago') to bound it."
+            )
+        logging.info("No Start Date; loading the object unbounded.")
         return None
 
     @staticmethod
@@ -741,16 +736,6 @@ class Component(ComponentBase):
         return parsed.strftime("%Y-%m-%d")
 
     @staticmethod
-    def _coerce_seed(value: int | str, is_int: bool) -> int | str:
-        """Coerce a watermark seed to ``int`` for an INT field; leave non-numeric input as-is."""
-        if not is_int:
-            return value
-        try:
-            return int(value)
-        except (TypeError, ValueError):  # fmt: skip
-            return value
-
-    @staticmethod
     def _upper_bound(is_int: bool, end_date: str = "") -> int | str:
         """Upper bound in the field's format (INT seconds, else ``YYYY-MM-DD`` — Medallia rejects a
         ``…Z`` timestamp, a v1 live-verified fact).
@@ -777,36 +762,6 @@ class Component(ComponentBase):
             return int(upper.timestamp()) if is_int else upper.strftime("%Y-%m-%d")
         now = datetime.now(tz=UTC)
         return int(now.timestamp()) if is_int else now.strftime("%Y-%m-%d")
-
-    @staticmethod
-    def _normalize_watermark(value: int | str | None, is_int: bool) -> int | str | None:
-        """Floor a DATE/DATETIME watermark to the day granularity the query bounds use.
-
-        Medallia returns a date/datetime field's value with a time part (e.g. ``2026-07-26
-        23:30:11``), but every bound the component emits is a day-granular ``YYYY-MM-DD`` string
-        (``_resolve_initial_start`` / ``_upper_bound`` — Medallia's date filter is day-granular).
-        Persisting the raw value would feed a full timestamp straight back into ``filter {gte: …}``
-        on the next run, a format nothing else produces. Floor it to the resolved day so run 2
-        sends the same shape as run 1; ``gte`` at day-start only widens the re-read window (the
-        upsert is idempotent), never narrows it, so no rows are missed. INT watermarks and ``None``
-        pass through untouched.
-        """
-        if is_int or value is None:
-            return value
-        text = str(value).strip()
-        if not text or _DATE_RE.match(text):
-            return value
-        if _DATETIME_RE.match(text):
-            return text[:10]
-        parsed = dateparser.parse(text, settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False})
-        return parsed.strftime("%Y-%m-%d") if parsed else text
-
-    def _save_incremental_state(self, row: RowConfiguration, watermark: int | str | None) -> None:
-        if row.incremental_field and watermark is not None:
-            self.write_state_file({STATE_LAST_INCREMENTAL_VALUE: watermark})
-            logging.info("Persisted watermark (last_incremental_value=%s).", watermark)
-        else:
-            logging.info("No watermark to persist; leaving state unchanged.")
 
     # -- field metadata ----------------------------------------------------------------
 
@@ -933,18 +888,8 @@ class Component(ComponentBase):
             return BaseType.boolean()
         return BaseType.string()
 
-    def _write_rows(
-        self,
-        table_path: str,
-        fieldnames: list[str],
-        nodes,
-        has_id: bool,
-        incremental_field: str,
-        is_int: bool,
-        initial_watermark: int | str | None,
-    ) -> int | str | None:
-        """Stream nodes into the output CSV, returning the advanced watermark."""
-        watermark = initial_watermark
+    def _write_rows(self, table_path: str, fieldnames: list[str], nodes, has_id: bool) -> None:
+        """Stream nodes into the output CSV."""
         record_count = 0
         with open(table_path, "w", encoding="utf-8", newline="") as out_file:
             writer = csv.DictWriter(out_file, fieldnames=fieldnames, extrasaction="ignore")
@@ -954,11 +899,8 @@ class Component(ComponentBase):
                 if not has_id:
                     row["_row_hash"] = row_hash(row)
                 writer.writerow(row)
-                if incremental_field:
-                    watermark = advance_watermark(watermark, row.get(incremental_field), is_int)
                 record_count += 1
         logging.info("Wrote %s record(s) to %s.", record_count, os.path.basename(table_path))
-        return watermark
 
     def _write_raw_table(self, table_name: str, nodes) -> None:
         """Write raw-mode nodes: generic flatten, id/row-hash PK, full load, no state.

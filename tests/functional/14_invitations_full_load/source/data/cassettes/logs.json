@@ -11,7 +11,7 @@
     {
       "level": "INFO",
       "logger": "root",
-      "message": "Applying Start Date lower bound.",
+      "message": "Loading from the Start Date (1781542800).",
       "timestamp": "2026-07-16T12:00:00.000Z"
     },
     {
@@ -42,12 +42,6 @@
       "level": "INFO",
       "logger": "root",
       "message": "Wrote 86 record(s) to invitations.csv.",
-      "timestamp": "2026-07-16T12:00:00.000Z"
-    },
-    {
-      "level": "INFO",
-      "logger": "root",
-      "message": "No watermark to persist; leaving state unchanged.",
       "timestamp": "2026-07-16T12:00:00.000Z"
     }
   ]
