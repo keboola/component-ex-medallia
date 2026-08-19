@@ -15,6 +15,7 @@ HTTP interactions are exercised via small in-memory stub sessions/token managers
 """
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -953,6 +954,161 @@ class TestDateWindowDecoupling:
         comp = object.__new__(Component)
         monkeypatch.setattr(comp, "get_state_file", lambda: {})
         assert comp._compute_lower_bound(self._row(load_type="full_load"), is_int=False) is None
+
+
+class TestLookback:
+    """Look Back re-reads a trailing slice so late-arriving records are not lost forever."""
+
+    def _row(self, **kw) -> RowConfiguration:
+        base = dict(data_object="feedback", mode="structured", incremental_field="e_creationdate")
+        base.update(kw)
+        return RowConfiguration(**base)
+
+    def _comp(self, monkeypatch, stored):
+        comp = object.__new__(Component)
+        state = {"last_incremental_value": stored} if stored is not None else {}
+        monkeypatch.setattr(comp, "get_state_file", lambda: state)
+        return comp
+
+    def test_late_arriving_record_is_missed_without_lookback_and_recovered_with_it(self, monkeypatch):
+        """Reproduces the reported data loss.
+
+        A survey created 2026-07-08 is only completed — and so only enters the ``feedback``
+        view — after the watermark has already advanced to 2026-07-10. Today's behaviour asks
+        Medallia for ``gte 2026-07-10``, which that record can never match. A Look Back widens
+        the resumed bound far enough back to ask for it again.
+        """
+        late_record_date = "2026-07-08"
+
+        without = self._comp(monkeypatch, "2026-07-10")._compute_lower_bound(
+            self._row(load_type="incremental_load"), is_int=False
+        )
+        assert without == "2026-07-10"
+        assert late_record_date < without  # the record is outside the window: silently lost
+
+        with_lookback = self._comp(monkeypatch, "2026-07-10")._compute_lower_bound(
+            self._row(load_type="incremental_load", lookback="7 days"), is_int=False
+        )
+        assert with_lookback == "2026-07-03"
+        assert late_record_date >= with_lookback  # now inside the window: recovered
+
+    def test_lookback_shifts_date_watermark(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-05-10")
+        row = self._row(load_type="incremental_load", lookback="2 days")
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-05-08"
+
+    def test_lookback_shifts_epoch_watermark_by_seconds(self, monkeypatch):
+        comp = self._comp(monkeypatch, 1783728000)
+        row = self._row(load_type="incremental_load", lookback="36 hours")
+        assert comp._compute_lower_bound(row, is_int=True) == 1783728000 - 36 * 3600
+
+    def test_epoch_watermark_never_goes_negative(self, monkeypatch):
+        comp = self._comp(monkeypatch, 100)
+        row = self._row(load_type="incremental_load", lookback="5 days")
+        assert comp._compute_lower_bound(row, is_int=True) == 0
+
+    def test_empty_lookback_leaves_the_bound_untouched(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-05-10")
+        assert comp._compute_lower_bound(self._row(load_type="incremental_load"), is_int=False) == "2026-05-10"
+
+    def test_lookback_is_ignored_on_the_first_run(self, monkeypatch):
+        comp = self._comp(monkeypatch, None)
+        row = self._row(load_type="incremental_load", initial_start="2026-01-01", lookback="30 days")
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
+
+    def test_lookback_is_ignored_for_a_full_load(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2099-01-01")
+        row = self._row(load_type="full_load", initial_start="2026-01-01", lookback="30 days")
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
+
+    def test_unparseable_lookback_raises_user_exception(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-05-10")
+        row = self._row(load_type="incremental_load", lookback="not a duration")
+        with pytest.raises(UserException, match="Could not parse 'Look Back'"):
+            comp._compute_lower_bound(row, is_int=False)
+
+    def test_lookback_duration_is_independent_of_wall_clock(self):
+        with freeze_time("2026-07-16T12:00:00+00:00"):
+            first = Component._parse_lookback("3 days")
+        with freeze_time("2027-02-01T23:59:00+00:00"):
+            second = Component._parse_lookback("3 days")
+        assert first == second == timedelta(days=3)
+
+
+class TestReprocessRange:
+    """The backfill switch makes Start/End Date authoritative without disturbing the cursor."""
+
+    def _row(self, **kw) -> RowConfiguration:
+        base = dict(data_object="feedback", mode="structured", incremental_field="e_creationdate")
+        base.update(kw)
+        return RowConfiguration(**base)
+
+    def _comp(self, monkeypatch, stored):
+        comp = object.__new__(Component)
+        monkeypatch.setattr(comp, "get_state_file", lambda: {"last_incremental_value": stored})
+        return comp
+
+    def test_default_is_off_and_resumes_from_the_watermark(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-08-19")
+        row = self._row(load_type="incremental_load", initial_start="2026-07-27")
+        assert row.reprocess_range is False
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-08-19"
+
+    def test_on_uses_the_start_date_instead_of_the_watermark(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-08-19")
+        row = self._row(load_type="incremental_load", initial_start="2026-07-27", reprocess_range=True)
+        assert comp._compute_lower_bound(row, is_int=False) == "2026-07-27"
+
+
+class TestWatermarkClamp:
+    """The persisted cursor only ever moves forward."""
+
+    def _comp(self, monkeypatch, stored):
+        comp = object.__new__(Component)
+        state = {"last_incremental_value": stored} if stored is not None else {}
+        monkeypatch.setattr(comp, "get_state_file", lambda: state)
+        return comp
+
+    def test_a_backfill_run_does_not_rewind_the_cursor(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-08-19")
+        assert comp._clamp_watermark("2026-08-02", is_int=False) == "2026-08-19"
+
+    def test_a_normal_run_still_advances(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-08-19")
+        assert comp._clamp_watermark("2026-08-20", is_int=False) == "2026-08-20"
+
+    def test_an_empty_lookback_run_cannot_drift_backwards(self, monkeypatch):
+        # _write_rows seeds the watermark from the (shifted-back) lower bound, so an empty run
+        # would otherwise persist the shifted value and reach further back on every run.
+        comp = self._comp(monkeypatch, "2026-08-19")
+        assert comp._clamp_watermark("2026-08-12", is_int=False) == "2026-08-19"
+
+    def test_epoch_clamp_compares_numerically(self, monkeypatch):
+        comp = self._comp(monkeypatch, 1785551000)
+        assert comp._clamp_watermark(1785000000, is_int=True) == 1785551000
+        comp = self._comp(monkeypatch, 1785551000)
+        assert comp._clamp_watermark(1785600000, is_int=True) == 1785600000
+
+    def test_no_stored_value_passes_through(self, monkeypatch):
+        comp = self._comp(monkeypatch, None)
+        assert comp._clamp_watermark("2026-08-02", is_int=False) == "2026-08-02"
+
+    def test_none_watermark_stays_none(self, monkeypatch):
+        comp = self._comp(monkeypatch, "2026-08-19")
+        assert comp._clamp_watermark(None, is_int=False) is None
+
+
+class TestNewRowOptionsAreBackwardsCompatible:
+    def test_a_config_without_the_new_keys_parses_with_todays_behaviour(self):
+        row = RowConfiguration(
+            data_object="feedback",
+            mode="structured",
+            incremental_field="e_creationdate",
+            load_type="incremental_load",
+            initial_start="yesterday",
+        )
+        assert row.lookback == ""
+        assert row.reprocess_range is False
 
 
 class TestUpperBound:

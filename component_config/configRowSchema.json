@@ -141,7 +141,7 @@
         "dependencies": {
           "mode": "structured"
         },
-        "tooltip": "The date field that the Start Date and End Date apply to. For an incremental load, the component also remembers the latest value it has seen and picks up from there on the next run. Leave empty to load the whole object with no date limit."
+        "tooltip": "The date field that the Start Date and End Date apply to. For an incremental load, the component also remembers the latest value it has seen and picks up from there on the next run. Leave empty to load the whole object with no date limit.\n\n**Choose this field carefully.** Pick one that tracks when a record became *available* in Medallia, not when it was originally created. Medallia recommends `e_initialfinishdate`. A creation date such as `e_creationdate` looks right but loses records: `feedback` only contains records once they are completed, so a survey created on the 1st and completed on the 20th first appears long after the 1st — and by then the component has already moved past that date and will never ask for it again. If you must use a creation date, set Look Back below to cover the gap."
       },
       "propertyOrder": 80
     },
@@ -162,6 +162,32 @@
         "tooltip": "The end of the date range to load (that whole day is included). In guided mode it is the latest date pulled; empty means up to now. In raw mode it replaces `{{end_date}}` in your query. Accepts a date like `2026-01-31`, a number of seconds since 1970, or words like `yesterday`."
       },
       "propertyOrder": 95
+    },
+    "lookback": {
+      "type": "string",
+      "title": "Look Back",
+      "description": "Re-read this far back on every run; empty means start exactly where the last run finished",
+      "options": {
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "How far back before its remembered position each incremental run starts. Records often reach Medallia after the date they are stamped with — a survey completed today can carry a creation date from weeks ago — and without a look-back the component has already passed that date and never sees them. Re-reading a window catches them; anything already loaded is simply matched on the primary key and updated, so no duplicates appear. Write it as `2 days`, `36 hours` or `1 week`. Empty (the default) keeps the current behaviour. Applies only to Incremental Load.\n\nMedallia advises allowing roughly 10 hours for a period's data to be complete, so treat that as the minimum. If your Date Field is a creation date rather than a completion date, you need considerably more — enough to cover the longest gap you see between a record being created and being answered."
+      },
+      "propertyOrder": 96
+    },
+    "reprocess_range": {
+      "type": "boolean",
+      "format": "checkbox",
+      "title": "Reload the dates above",
+      "description": "Reload Start Date to End Date on this run instead of continuing where the last run finished",
+      "default": false,
+      "options": {
+        "dependencies": {
+          "mode": "structured"
+        },
+        "tooltip": "Use this to fetch a past period again — for example after discovering that records are missing. Turn it on, set Start Date and End Date to the period you want back, and run the configuration; the rows are matched on the primary key, so existing data is updated rather than duplicated. **Turn it off again afterwards**, otherwise every run reloads that same period and never picks up anything new. Your saved position is not lost while this is on, so normal runs continue from where they were once you switch it off."
+      },
+      "propertyOrder": 97
     },
     "filters": {
       "type": "string",

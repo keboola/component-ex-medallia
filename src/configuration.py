@@ -134,6 +134,17 @@ class RowConfiguration(BaseModel):
         default="",
         description="End Date (upper bound): ISO date, epoch seconds, or a relative expression; empty = now.",
     )
+    lookback: str = Field(
+        default="",
+        description="Re-read this far back from the stored watermark on every incremental resume "
+        "(e.g. '2 days', '36 hours'). Empty (default) = resume exactly at the watermark. "
+        "Recovers records that become queryable only after their own date window has closed.",
+    )
+    reprocess_range: bool = Field(
+        default=False,
+        description="Ignore the stored watermark for this run and use Start Date / End Date instead. "
+        "Backfill switch; the stored watermark is never moved backwards.",
+    )
     filters: str = Field(default="", description="Optional Medallia filter tree as a JSON string.")
     # Raw mode.
     raw_query: str = Field(default="", description="Raw GraphQL query (raw mode).")

@@ -56,9 +56,11 @@ Each row runs in one of two **modes**.
 | Fields             | `fields`              | Field IDs to extract (**Load Fields**); leave empty to take all scalar fields.               |
 | Field picker scope | `only_program_fields` | Picker-only: `true` offers only fields used on a survey program; `false` (default) offers the whole catalog. |
 | Load Type          | `load_type`           | `incremental_load` (default) or `full_load`.                                                 |
-| Incremental Field  | `incremental_field`   | Date/int field ID driving the watermark (**Load Date Fields**).                              |
+| Incremental Field  | `incremental_field`   | Date/int field ID driving the watermark (**Load Date Fields**). Prefer an *arrival* field such as `e_initialfinishdate` — see [Choosing the incremental field](#choosing-the-incremental-field). |
 | Start Date         | `initial_start`       | First-run lower bound: ISO date, epoch seconds, or a relative expression (`5 days ago`).     |
 | End Date           | `end_date`            | Upper bound (same formats); empty = now.                                                      |
+| Look Back          | `lookback`            | Re-read this far back before the stored watermark on every incremental resume (`2 days`, `36 hours`). Empty (default) = resume exactly at the watermark. |
+| Reload the dates above | `reprocess_range` | `true` ignores the stored watermark for this run and loads Start Date → End Date instead. Default `false`. The stored watermark is never moved backwards. |
 | Filters            | `filters`             | Optional Medallia filter tree as a JSON string.                                              |
 | Output Table       | `output_table`        | Optional; defaults to the data object name.                                                  |
 | Page Size          | `page_size`           | Records per API page; clamped to **25–500** (default **100**).                                |
@@ -72,6 +74,35 @@ Each row runs in one of two **modes**.
 | Page Size    | `page_size`    | Records per API page; clamped to **25–500** (default **100**).                                    |
 
 Raw mode always performs a full load. Use **Validate & Preview Query** to check it.
+
+### Choosing the incremental field
+
+The incremental field decides which records an incremental run can ever see, so the choice
+matters more than it looks. Pick a field that tracks when a record became **available** in
+Medallia, not when it was originally created. Medallia
+[recommends `e_initialfinishdate`](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/pull-incremental-data)
+and rules out `e_lastupdated` as too volatile.
+
+A creation date such as `e_creationdate` is the trap. `feedback` is a view over records whose
+`e_status` is `COMPLETED` / `EXCLUDED` / `AUTOEXCLUDED`, so a survey created on the 1st and
+completed on the 20th only enters that view on the 20th — still carrying its 1st-of-the-month
+creation date. By then the watermark has moved past the 1st and the filter (`gte: <watermark>`)
+can never match it again. The record is missed permanently, and the run still reports success.
+
+Two ways out, and they compose:
+
+- **Preferred:** switch the Date Field to an arrival-ordered field (`e_initialfinishdate`, or an
+  epoch-seconds K-field derived from it). Medallia's own reference extractor does this and needs
+  no overlap at all.
+- **Where that is not available:** set **Look Back** wide enough to cover the lag between a record
+  being created and becoming queryable. Medallia advises allowing
+  [~10 hours for a period to be complete](https://docs.medallia.com/en/medallia-experience-cloud/integration/apis/query-api/data-queries/filter-by-date-ranges);
+  a creation-date watermark needs considerably more. Re-read rows are matched on the primary key,
+  so overlap costs API calls, not duplicates.
+
+To recover a period that was already missed, set **Start Date** / **End Date** to that period and
+turn on **Reload the dates above** for one run, then turn it off again. Your saved position is not
+disturbed while it is on.
 
 ### Sync actions
 

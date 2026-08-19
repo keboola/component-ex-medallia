@@ -19,7 +19,7 @@
     "data_object": "feedback",
     "fields": ["e_nps", "e_comment"],
     "load_type": "incremental_load",
-    "incremental_field": "e_creationdate",
+    "incremental_field": "e_initialfinishdate",
     "initial_start": "2026-01-01",
     "filters": "",
     "page_size": 100

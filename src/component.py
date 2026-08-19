@@ -400,6 +400,8 @@ except ImportError:  # pragma: no cover - production image has no dev dependenci
 
 # state.json key for the single-scalar incremental watermark (spec §8).
 STATE_LAST_INCREMENTAL_VALUE = "last_incremental_value"
+# Sentinel for "the state file has not been read yet" — distinct from a genuinely absent watermark.
+_UNREAD = object()
 
 # validateQuery row-preview limits (kept small — one gentle live page shown in the config UI).
 _PREVIEW_ROWS = 5
@@ -584,7 +586,7 @@ class Component(ComponentBase):
         watermark: int | str | None = None
         if row.incremental:
             if windowed:
-                watermark = self._normalize_watermark(max_watermark, is_int)
+                watermark = self._clamp_watermark(self._normalize_watermark(max_watermark, is_int), is_int)
             else:
                 logging.info("Load ran unbounded (no date window applied); not persisting a watermark.")
         self._save_incremental_state(row, watermark)
@@ -697,6 +699,19 @@ class Component(ComponentBase):
             return str(data_type).upper() in {"INT", "INTEGER"}
         return shape.scalar_fields.get(field_id) == "Int"
 
+    def _stored_watermark(self) -> Any:
+        """Read ``last_incremental_value`` from state, once per run.
+
+        The Keboola library logs a line on every state read, so reading twice would change the job
+        log for configs whose behaviour is untouched. Caching also guarantees the resume bound and
+        the persist-time clamp judge against exactly the same stored value.
+        """
+        cached = getattr(self, "_stored_watermark_cache", _UNREAD)
+        if cached is _UNREAD:
+            cached = (self.get_state_file() or {}).get(STATE_LAST_INCREMENTAL_VALUE)
+            self._stored_watermark_cache = cached
+        return cached
+
     def _compute_lower_bound(self, row: RowConfiguration, is_int: bool) -> int | str | None:
         """Fetch lower bound. Incremental resumes from the stored watermark when present; otherwise
         (a full load, or an incremental first run) the Start Date is used. None → no lower bound.
@@ -704,11 +719,20 @@ class Component(ComponentBase):
         For an INT field the value is coerced to ``int`` so the first ``advance_watermark`` call
         compares numerically rather than lexicographically.
         """
-        if row.incremental:
-            stored = (self.get_state_file() or {}).get(STATE_LAST_INCREMENTAL_VALUE)
+        if row.incremental and not row.reprocess_range:
+            stored = self._stored_watermark()
             if stored is not None and str(stored) != "":
                 logging.info("Resuming from stored watermark (%s).", stored)
-                return self._coerce_seed(stored, is_int)
+                return self._apply_lookback(self._coerce_seed(stored, is_int), row.lookback, is_int)
+        if row.incremental and row.reprocess_range:
+            # Backfill switch: the Start Date wins over the watermark for this run. The watermark
+            # itself is left alone (see the clamp in _run_structured), so the next ordinary run
+            # still resumes where the incremental loads had got to.
+            logging.warning(
+                "Reprocess date range is ON: ignoring the stored watermark and loading from the "
+                "Start Date. Turn it off once the backfill is done, or every run will reload this "
+                "same range."
+            )
         if row.initial_start.strip():
             logging.info("Applying Start Date lower bound.")
             return self._resolve_initial_start(row.initial_start, is_int)
@@ -739,6 +763,59 @@ class Component(ComponentBase):
         if is_int:
             return int(datetime(parsed.year, parsed.month, parsed.day, tzinfo=UTC).timestamp())
         return parsed.strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _parse_lookback(value: str) -> timedelta:
+        """Parse a lookback duration (e.g. ``2 days``, ``36 hours``) into a positive ``timedelta``.
+
+        Resolved against a FIXED reference instant rather than ``now`` so the result is a pure
+        duration — the same config always yields the same shift, independent of when the job runs.
+        """
+        text = value.strip()
+        expression = text if text.lower().endswith("ago") else f"{text} ago"
+        reference = datetime(2000, 1, 1, tzinfo=UTC)
+        parsed = dateparser.parse(
+            expression,
+            settings={
+                "RELATIVE_BASE": reference.replace(tzinfo=None),
+                "PREFER_DATES_FROM": "past",
+                "RETURN_AS_TIMEZONE_AWARE": False,
+            },
+        )
+        delta = reference.replace(tzinfo=None) - parsed if parsed is not None else None
+        if delta is None or delta <= timedelta(0):
+            raise UserException(
+                f"Could not parse 'Look Back' value {value.strip()!r}. Use a positive duration such "
+                "as '2 days', '36 hours' or '1 week'. Leave it empty to resume exactly at the "
+                "stored watermark."
+            )
+        return delta
+
+    @classmethod
+    def _apply_lookback(cls, bound: int | str, lookback: str, is_int: bool) -> int | str:
+        """Shift a resumed lower bound back by ``lookback``; empty ⇒ the bound is returned as-is.
+
+        Medallia's watermark fields carry the date the record *belongs to*, not the moment it
+        became queryable, so a record can surface after its own window has already closed — the
+        `feedback` view in particular only admits a record once it completes, long after its
+        creation date. Re-reading a trailing slice on every resume brings those records back; the
+        PK upsert absorbs the overlap, so the only cost is re-reading rows already loaded.
+        """
+        if not lookback.strip():
+            return bound
+        delta = cls._parse_lookback(lookback)
+        if is_int:
+            shifted: int | str = max(0, int(bound) - int(delta.total_seconds()))
+        else:
+            parsed = dateparser.parse(
+                str(bound), settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False}
+            )
+            if parsed is None:  # a format nothing else produces; leave the bound untouched
+                logging.warning("Could not apply Look Back to watermark %r; resuming at it unchanged.", bound)
+                return bound
+            shifted = (parsed - delta).strftime("%Y-%m-%d")
+        logging.info("Look Back %s applied: resuming from %s instead of %s.", lookback.strip(), shifted, bound)
+        return shifted
 
     @staticmethod
     def _coerce_seed(value: int | str, is_int: bool) -> int | str:
@@ -800,6 +877,26 @@ class Component(ComponentBase):
             return text[:10]
         parsed = dateparser.parse(text, settings={"PREFER_DATES_FROM": "past", "RETURN_AS_TIMEZONE_AWARE": False})
         return parsed.strftime("%Y-%m-%d") if parsed else text
+
+    def _clamp_watermark(self, watermark: int | str | None, is_int: bool) -> int | str | None:
+        """Never persist a watermark BELOW the stored one — the cursor only ever moves forward.
+
+        Without this, the two new backwards-reaching options would rewind state: a Look Back run
+        seeds ``_write_rows`` with the shifted-back bound, so a resume that happens to return no
+        rows would persist the shifted value and drift further back every run; and a Reprocess
+        run over an old range would persist that old range's max. Clamping to the stored value
+        keeps both options read-only with respect to the cursor. It is a no-op for an ordinary
+        run, where the stored value is already the seed.
+        """
+        if watermark is None:
+            return None
+        stored = self._stored_watermark()
+        if stored is None or str(stored) == "":
+            return watermark
+        clamped = advance_watermark(watermark, self._coerce_seed(stored, is_int), is_int)
+        if clamped != watermark:
+            logging.info("Keeping the stored watermark (%s); this run's range ended earlier.", clamped)
+        return clamped
 
     def _save_incremental_state(self, row: RowConfiguration, watermark: int | str | None) -> None:
         if row.incremental_field and watermark is not None:
