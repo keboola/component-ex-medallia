@@ -16,6 +16,7 @@ HTTP interactions are exercised via small in-memory stub sessions/token managers
 
 import csv
 import json
+import logging
 import re
 from datetime import timedelta
 from types import SimpleNamespace
@@ -1000,6 +1001,23 @@ class TestLookback:
         comp = self._comp(monkeypatch, "2099-01-01")
         row = self._row(load_type="full_load", initial_start="2026-01-01", lookback="30 days")
         assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
+
+    def test_a_full_load_warns_about_lookback_rather_than_failing_on_it(self, monkeypatch, caplog):
+        # Look Back is inert for a full load, so a typo in it must not fail the job — but staying
+        # silent would leave the user believing it is doing something.
+        comp = self._comp(monkeypatch, "2099-01-01")
+        row = self._row(load_type="full_load", initial_start="2026-01-01", lookback="not a duration")
+        with caplog.at_level(logging.WARNING):
+            assert comp._compute_lower_bound(row, is_int=False) == "2026-01-01"
+        assert "ignored for a Full Load" in caplog.text
+
+    def test_an_incremental_row_still_fails_fast_on_a_bad_lookback(self, monkeypatch):
+        # The run-1 validation must survive the full-load carve-out above: `incremental` is a
+        # static property of the config, not a fact about this run, so nothing becomes dormant.
+        comp = self._comp(monkeypatch, None)
+        row = self._row(load_type="incremental_load", initial_start="2026-01-01", lookback="7")
+        with pytest.raises(UserException, match="missing a time unit"):
+            comp._compute_lower_bound(row, is_int=False)
 
     def test_unparseable_lookback_raises_user_exception(self, monkeypatch):
         comp = self._comp(monkeypatch, "2026-05-10")

@@ -720,11 +720,24 @@ class Component(ComponentBase):
 
         For an INT field the value is coerced to ``int`` so the first ``advance_watermark`` call
         compares numerically rather than lexicographically.
+
+        Two options adjust that for an incremental row. ``lookback`` shifts a resumed bound back by
+        a duration so records that surface after their own window closed are re-read; it is
+        validated up front (below) rather than on first use, so a typo fails on run 1 instead of
+        lying dormant until the row starts resuming. ``reprocess_range`` bypasses the stored
+        watermark entirely for one run and loads the Start/End Date range instead — a backfill
+        switch, which is why it requires a Start Date and why the persisted watermark is clamped
+        (see ``_clamp_watermark``) so a backfill can never rewind the cursor.
         """
-        # Validate Look Back on EVERY run, not only on a resume: otherwise a typo sits inert
-        # through the first run and only fails the day the row starts resuming.
         if row.lookback.strip():
-            self._parse_lookback(row.lookback)
+            if row.incremental:
+                self._parse_lookback(row.lookback)
+            else:
+                # A full load re-reads from the Start Date every run, so there is nothing to look
+                # back FROM. Say so rather than either failing on a value we ignore or accepting a
+                # typo in silence. Gated on the load type, not on reprocess_range: that toggle is
+                # transient, and keying off it would make a typo fail only once it is switched.
+                logging.warning("Look Back is ignored for a Full Load, which re-reads from the Start Date each run.")
         if row.incremental and row.reprocess_range and not row.initial_start.strip():
             raise UserException(
                 "'Reload the dates above' is on but no Start Date is set, which would reload the "
